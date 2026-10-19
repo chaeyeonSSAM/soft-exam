@@ -181,6 +181,34 @@ select.blank{padding:1px 4px;cursor:pointer}
 .rcard .rno{font-size:12.5px;font-weight:800;color:var(--brand)} .rcard .rttl{font-size:17px;font-weight:800;margin:2px 0 6px}
 .rcard .rstat{font-size:12.5px;color:var(--mute);min-height:20px;margin-bottom:8px}
 
+/* 학생: 경고 배너 */
+.warnbar{position:fixed;left:50%;top:64px;transform:translate(-50%,-20px);background:#c2332b;color:#fff;padding:11px 20px;border-radius:12px;font-weight:700;font-size:14px;z-index:130;box-shadow:0 8px 28px rgba(194,51,43,.4);opacity:0;pointer-events:none;transition:.25s;max-width:92vw;text-align:center}
+.warnbar.show{opacity:1;transform:translate(-50%,0)}
+
+/* 교사: 실시간 감독 */
+.mon-wrap{display:grid;grid-template-columns:1fr 330px;gap:14px;align-items:start}
+.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(235px,1fr));gap:10px}
+.mgrid.big{grid-template-columns:repeat(auto-fill,minmax(310px,1fr))} .mgrid.big .mcard{font-size:15.5px}
+.mcard{background:var(--card);border:2px solid var(--line);border-radius:12px;padding:10px 12px;cursor:pointer;box-shadow:var(--shadow)}
+.mcard:hover{border-color:var(--brand)}
+.mcard.s-done{background:#f3faf6;border-color:#cfe9dc} .mcard.s-lost{background:var(--warn-l);border-color:#f0d49a}
+.mcard.s-away{background:var(--bad-l);border-color:var(--bad)}
+.mcard.flash{background:#ffe3e1;border-color:var(--bad);box-shadow:0 0 0 4px #c2332b33}
+.mh{display:flex;align-items:center;gap:6px;flex-wrap:wrap} .mh b{font-size:15px} .mno{font-size:11.5px;color:var(--mute)}
+.mh .chip{margin-left:auto}
+.mcur{font-size:13px;margin:5px 0 4px;font-weight:600;color:#2a3245}
+.mbar{height:7px;background:#e8ecf4;border-radius:99px;overflow:hidden} .mbar i{display:block;height:100%;background:var(--brand)}
+.mcard.s-done .mbar i{background:var(--ok)}
+.mmeta{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--mute);margin-top:5px}
+.mmeta .sp{flex:1} .segs{display:flex;gap:3px}
+.seg{display:block;width:18px;height:6px;background:#e0e5ef;border-radius:3px;overflow:hidden} .seg i{display:block;height:100%;background:#7a98f5}
+.mchips{display:flex;gap:5px;align-items:center;margin-top:7px;flex-wrap:wrap} .mago{font-size:11.5px;color:var(--mute);margin-left:auto}
+.mlogp{position:sticky;top:12px;max-height:82vh;overflow:auto;margin:0}
+.mlog .lg{border-top:1px solid var(--line);padding:7px 0;font-size:13px} .mlog .lg:first-child{border-top:0}
+.mlog .lt{color:var(--mute);font-size:11.5px;margin-right:6px} .mlog .lno{color:var(--mute);font-size:11.5px;margin-left:6px}
+.mlog .lg.leave .ltx,.mlog .lg.paste .ltx{color:var(--bad);font-weight:700} .mlog .lg.back .ltx{color:var(--mute)} .mlog .lg.done .ltx{color:var(--ok)}
+@media(max-width:1000px){.mon-wrap{grid-template-columns:1fr}.mlogp{position:static;max-height:none}}
+
 </style>
 </head>
 <body>
@@ -388,7 +416,7 @@ function createSim(cfg) {
     const inj = h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { if (rInjectIn.value) { st.inbox.push(rInjectIn.value); toast('수신함에 넣었습니다: ' + rInjectIn.value); rInjectIn.value = ''; } } }, '수신 메시지 넣기');
     radioBox.append(radioLogEl, h('div', { class: 'row2', style: { marginTop: '6px' } }, '📥 이 마이크로비트가 받을 메시지:', rInjectIn, inj));
   }
-  function renderRadioLog() { if (!radioLogEl) return; radioLogEl.replaceChildren('📡 보낸 무선 메시지: ', rlog.length ? rlog.map((r, i) => h('span', null, i ? ' · ' : '', h('b', null, r.m), r.n > 1 ? ` ×${r.n}` : '')) : '(없음)'); }
+  function renderRadioLog() { if (!radioLogEl) return; radioLogEl.replaceChildren('📡 보낸 무선 메시지: ', ...(rlog.length ? rlog.map((r, i) => h('span', null, i ? ' · ' : '', h('b', null, r.m), r.n > 1 ? ` ×${r.n}` : '')) : ['(없음)'])); }
   function appendCons(text, cls) {
     const span = cls ? h('span', { class: cls }, text) : document.createTextNode(text);
     cons.append(span);
@@ -496,7 +524,7 @@ async function runBlock(sim, srcItem, srcBlock, runCfg) {
 const S = {
   token: null, no: '', name: '', cls: 0, code: '',
   answers: {}, feedback: 'error', minutes: 45,
-  deadline: 0, skew: 0, leave: 0, leaveLog: [],
+  deadline: 0, skew: 0, leave: 0, leaveLog: [], paste: 0, cur: '', curCell: '', again: false,
   dirty: false, saving: false, submitted: false, submitting: false,
   sims: [], refreshers: [], timers: [], navEls: {}, warned: {},
 };
@@ -582,7 +610,7 @@ function applyServerSession(r, keepLocal) {
   const ans = Object.assign({}, r.answers || {});
   if (keepLocal) { for (const [k, v] of Object.entries(keepLocal)) if (v !== ans[k] && String(v || '') !== '') ans[k] = v; }
   S.answers = ans;
-  S.leave = r.leave_count || 0; S.leaveLog = Array.isArray(r.leave_log) ? r.leave_log : [];
+  S.leave = r.leave_count || 0; S.leaveLog = Array.isArray(r.leave_log) ? r.leave_log : []; S.paste = r.paste_count || 0;
 }
 function readLocalBackup(deadlineIso) {
   try { const o = JSON.parse(lsGet(lsKey()) || 'null'); if (o && o.deadline === deadlineIso && o.answers) return o.answers; } catch (e) { /* 무시 */ }
@@ -765,11 +793,15 @@ function renderExam() {
 function setSaveUI(t, bad) { if (!S.saveEl) return; S.saveEl.textContent = t; S.saveEl.classList.toggle('bad', !!bad); }
 let _st = null;
 function scheduleSave() { clearTimeout(_st); _st = setTimeout(saveNow, 1500); if (S.saveEl && !S.saving) setSaveUI('저장 대기…'); }
+function presencePayload() {
+  return { item: S.cur || '', cell: S.curCell || '', away: !!(leaveAt && leaveAt.counted), away_ms: leaveAt && leaveAt.counted ? Date.now() - leaveAt.t : 0 };
+}
 async function saveNow() {
-  if (!live() || S.saving || S.submitting) return;
-  S.saving = true; const snap = JSON.stringify(S.answers);
+  if (!live() || S.submitting) return;
+  if (S.saving) { S.again = true; return; }
+  S.saving = true; S.again = false; const snap = JSON.stringify(S.answers);
   try {
-    const r = await API.rpc('save_progress', { token: S.token, answers: S.answers, leave_count: S.leave, leave_log: S.leaveLog }, { retries: 1 });
+    const r = await API.rpc('save_progress', { token: S.token, answers: S.answers, leave_count: S.leave, paste_count: S.paste, leave_log: S.leaveLog, presence: presencePayload() }, { retries: 1 });
     if (r.error) { await handleSessionError(r.error); return; }
     if (r.submitted) { onServerSubmitted(r.timeout ? '응시 시간이 끝나 자동 제출되었습니다.' : '제출이 완료되었습니다.'); return; }
     if (r.server_now) S.skew = Date.parse(r.server_now) - Date.now();
@@ -779,8 +811,20 @@ async function saveNow() {
     setSaveUI(e.network ? '저장 실패: 연결 확인 (자동 재시도)' : '저장 오류: ' + e.message, true);
   } finally {
     S.saving = false;
-    if (live() && S.dirty) { clearTimeout(_st); _st = setTimeout(saveNow, 4000); }
+    if (live() && S.again) setTimeout(saveNow, 50);
+    else if (live() && S.dirty) { clearTimeout(_st); _st = setTimeout(saveNow, 4000); }
   }
+}
+/* 답안이 그대로일 때는 가벼운 상태 알림만 보냄 (교사 감독 화면용 + 연결 유지) */
+async function heartbeat() {
+  if (!live() || S.submitting) return;
+  if (S.dirty || S.saving) { saveNow(); return; }
+  try {
+    const r = await API.rpc('ping', { token: S.token, leave_count: S.leave, paste_count: S.paste, presence: presencePayload() }, { retries: 0, timeout: 10000 });
+    if (r.error) { await handleSessionError(r.error); return; }
+    if (r.submitted) { onServerSubmitted(r.timeout ? '응시 시간이 끝나 자동 제출되었습니다.' : '제출이 완료되었습니다.'); return; }
+    if (r.server_now) S.skew = Date.parse(r.server_now) - Date.now();
+  } catch (e) { setSaveUI('연결 확인 중…', true); }
 }
 async function handleSessionError(msg) {
   if (!/만료/.test(msg) || S.relogging) { setSaveUI(msg, true); return; }
@@ -818,7 +862,7 @@ function trimLog() { if (S.leaveLog.length > 280) S.leaveLog = S.leaveLog.slice(
 function countLeave() {
   if (!leaveAt || leaveAt.counted || !live()) return;
   leaveAt.counted = true; S.leave++;
-  leaveAt.entry = { t: new Date(leaveAt.t).toISOString(), k: leaveAt.kind }; S.leaveLog.push(leaveAt.entry); trimLog(); scheduleSave();
+  leaveAt.entry = { t: new Date(leaveAt.t).toISOString(), k: leaveAt.kind }; S.leaveLog.push(leaveAt.entry); trimLog(); saveNow();
 }
 function startLeave(kind) {
   if (!live()) return;
@@ -829,27 +873,41 @@ function startLeave(kind) {
 function endLeave() {
   if (!leaveAt) return;
   clearTimeout(leaveAt.timer);
-  if (leaveAt.counted && leaveAt.entry) { leaveAt.entry.ms = Date.now() - leaveAt.t; scheduleSave(); toast('화면을 벗어난 기록이 저장되었습니다. (누적 ' + S.leave + '회)', 3000); }
-  leaveAt = null;
+  const was = leaveAt; leaveAt = null;
+  if (was.counted && was.entry) { was.entry.ms = Date.now() - was.t; saveNow(); warnBar(`⚠ 시험 화면을 벗어났습니다. (${Math.max(1, Math.round(was.entry.ms / 1000))}초) 이 기록은 선생님께 전달됩니다. 누적 ${S.leave}회`); }
 }
 function onPaste(e) {
   if (!live()) return;
   const t = e.target; if (!t || !t.dataset || !t.dataset.cell) return;
-  const txt = (e.clipboardData && e.clipboardData.getData('text')) || '';
-  S.leaveLog.push({ t: new Date().toISOString(), k: 'paste', cell: t.dataset.cell, n: txt.length }); trimLog(); scheduleSave();
+  const txt = (e.type === 'drop' ? (e.dataTransfer && e.dataTransfer.getData('text')) : (e.clipboardData && e.clipboardData.getData('text'))) || '';
+  S.leaveLog.push({ t: new Date().toISOString(), k: e.type === 'drop' ? 'drop' : 'paste', cell: t.dataset.cell, n: txt.length }); trimLog();
+  S.paste++; saveNow();
+  warnBar('⚠ 붙여넣기가 감지되었습니다. 이 기록은 선생님께 전달됩니다. (누적 ' + S.paste + '회)');
+}
+function onFocusIn(e) {
+  const t = e.target; if (!t || !t.closest) return;
+  const it = t.closest('.item'); if (!it) return;
+  const id = it.id.replace(/^it-/, ''); const cell = (t.dataset && t.dataset.cell) || '';
+  if (id !== S.cur || cell !== S.curCell) { S.cur = id; S.curCell = cell; scheduleSave(); }
+}
+let _wb = null;
+function warnBar(msg) {
+  let el = document.getElementById('warnbar');
+  if (!el) { el = h('div', { id: 'warnbar', class: 'warnbar', role: 'alert' }); document.body.append(el); }
+  el.textContent = msg; el.classList.add('show'); clearTimeout(_wb); _wb = setTimeout(() => el.classList.remove('show'), 9000);
 }
 function startStudentTimers() {
   stopStudentTimers();
-  S.timers.push(setInterval(updateTimer, 500), setInterval(() => { if (live()) saveNow(); }, 20000));
+  S.timers.push(setInterval(updateTimer, 500), setInterval(heartbeat, 15000));
   window.addEventListener('beforeunload', onBeforeUnload);
   window.addEventListener('blur', onBlur); window.addEventListener('focus', endLeave);
-  document.addEventListener('visibilitychange', onVis); document.addEventListener('paste', onPaste, true);
+  document.addEventListener('visibilitychange', onVis); document.addEventListener('paste', onPaste, true); document.addEventListener('drop', onPaste, true); document.addEventListener('focusin', onFocusIn, true);
 }
 function stopStudentTimers() {
   S.timers.forEach(clearInterval); S.timers = [];
   window.removeEventListener('beforeunload', onBeforeUnload);
   window.removeEventListener('blur', onBlur); window.removeEventListener('focus', endLeave);
-  document.removeEventListener('visibilitychange', onVis); document.removeEventListener('paste', onPaste, true);
+  document.removeEventListener('visibilitychange', onVis); document.removeEventListener('paste', onPaste, true); document.removeEventListener('drop', onPaste, true); document.removeEventListener('focusin', onFocusIn, true);
 }
 function onBlur() { startLeave('blur'); }
 function onVis() { if (document.hidden) { startLeave('hidden'); if (live()) saveNow(); } else endLeave(); }
@@ -876,7 +934,7 @@ async function doSubmit(kind) {
     let r = null;
     for (let i = 0; i < 5; i++) {
       try {
-        r = await API.rpc('submit_exam', { token: S.token, answers: S.answers, leave_count: S.leave, leave_log: S.leaveLog }, { retries: 1, timeout: 25000 });
+        r = await API.rpc('submit_exam', { token: S.token, answers: S.answers, leave_count: S.leave, paste_count: S.paste, leave_log: S.leaveLog }, { retries: 1, timeout: 25000 });
         if (r.error && /만료/.test(r.error) && !S.relogging) { await handleSessionError(r.error); if (!S.token) break; continue; }
         break;
       } catch (e) { await sleepMs(1500 * (i + 1)); }
@@ -950,7 +1008,7 @@ async function renderTeacher(notice) {
   }
   try { T.ov = await tcall('t_overview'); } catch (e) { if (e.message !== '로그인 만료') errToast(e); return; }
   const content = h('div');
-  const tabs = [['status', '응시 현황'], ['grade', '서술형 채점'], ['settings', '설정·접속코드'], ['export', '성적 내보내기']];
+  const tabs = [['status', '응시 현황'], ['monitor', '실시간 감독'], ['grade', '서술형 채점'], ['settings', '설정·접속코드'], ['export', '성적 내보내기']];
   const tabBar = h('div', { class: 'tabs' }, tabs.map(([k, l]) => h('button', { class: 'tab' + (T.tab === k ? ' on' : ''), type: 'button', onclick: () => { T.tab = k; renderTeacher(); } }, l)));
   const openChip = h('span', { class: 'chip ' + (T.ov.settings.is_open ? 'g' : 'r') }, T.ov.settings.is_open ? '응시 가능(열림)' : '응시 불가(닫힘)');
   setScreen(h('div', { class: 't-wrap' },
@@ -959,6 +1017,7 @@ async function renderTeacher(notice) {
       h('button', { class: 'btn ghost sm', type: 'button', onclick: () => teacherLogout() }, '로그아웃')),
     tabBar, content));
   if (T.tab === 'status') tabStatus(content);
+  else if (T.tab === 'monitor') tabMonitor(content);
   else if (T.tab === 'grade') tabGrade(content);
   else if (T.tab === 'settings') tabSettings(content);
   else tabExport(content);
@@ -1011,7 +1070,7 @@ async function tabStatus(box) {
     try {
       const r = await tcall('t_list', { archived: T.showArchived });
       const classes = [...new Set(r.rows.map((x) => x.class_no))].sort((a, b) => a - b);
-      const cur = T.classFilter; clsSel.replaceChildren(h('option', { value: '' }, '전체 반'), classes.map((c) => h('option', { value: c }, c + '반'))); clsSel.value = cur;
+      const cur = T.classFilter; clsSel.replaceChildren(h('option', { value: '' }, '전체 반'), ...classes.map((c) => h('option', { value: c }, c + '반'))); clsSel.value = cur;
       const rows = r.rows.filter((x) => !cur || String(x.class_no) === cur);
       const inProg = rows.filter((x) => x.status === 'in_progress' && !x.archived).length, sub = rows.filter((x) => x.status === 'submitted' && !x.archived).length;
       summary.replaceChildren(h('span', { class: 'chip b' }, `응시 중 ${inProg}명`), h('span', { class: 'chip g' }, `제출 ${sub}명`), h('span', { style: { color: 'var(--mute)', fontSize: '12.5px' } }, '갱신 ' + hhmmss(new Date())));
@@ -1048,7 +1107,7 @@ function statusRow(x, conv, reload) {
   return h('tr', { style: x.archived ? { opacity: '.55' } : null },
     h('td', null, x.student_no), h('td', null, x.name), h('td', null, st),
     h('td', { class: 'num' }, `${x.answered}/${TOTAL_CELLS}`), h('td', null, fmtTime(x.started_at)), h('td', null, fmtTime(x.last_saved)),
-    h('td', { class: 'num' }, x.leave_count ? h('span', { class: 'chip ' + (x.leave_count >= 5 ? 'r' : 'y') }, x.leave_count) : '0'),
+    h('td', { class: 'num' }, x.leave_count ? h('span', { class: 'chip ' + (x.leave_count >= 5 ? 'r' : 'y') }, x.leave_count) : '0', x.paste_count ? h('span', { class: 'chip r', style: { marginLeft: '4px' }, title: '붙여넣기' }, '붙 ' + x.paste_count) : null),
     h('td', { class: 'num' }, subm ? x.auto_total : '-'), h('td', { class: 'num' }, subm ? `${x.essay_total} (${x.essay_graded}/${x.essay_count})` : '-'),
     h('td', { class: 'num' }, subm ? raw : '-'), h('td', { class: 'num' }, fin == null ? '-' : fin + (done ? '' : '*')), h('td', null, acts));
 }
@@ -1083,7 +1142,7 @@ async function openDetail(id, reload) {
   ov.append(h('div', { class: 'modal', style: { maxWidth: '980px' } },
     h('h3', null, `${a.student_no} ${a.name} · ${a.status === 'submitted' ? '제출 완료' : '응시 중'}`),
     h('div', { class: 'ge-row' }, h('span', { class: 'chip b' }, `원점수 ${rawNow} / ${sumPts()}`), h('span', { class: 'chip g' }, `환산 ${finalFromRaw(rawNow, conv) ?? '-'}`),
-      h('span', { class: 'chip ' + (a.leave_count ? 'y' : 'g') }, `이탈 ${a.leave_count}회`), h('span', { style: { color: 'var(--mute)', fontSize: '12.5px' } }, `시작 ${fmtTime(a.started_at)} · 제출 ${fmtTime(a.submitted_at)}`)),
+      h('span', { class: 'chip ' + (a.leave_count ? 'y' : 'g') }, `이탈 ${a.leave_count}회`), h('span', { class: 'chip ' + (a.paste_count ? 'r' : 'g') }, `붙여넣기 ${a.paste_count || 0}회`), h('span', { style: { color: 'var(--mute)', fontSize: '12.5px' } }, `시작 ${fmtTime(a.started_at)} · 제출 ${fmtTime(a.submitted_at)}`)),
     leaves.length ? h('details', { style: { margin: '6px 0' } }, h('summary', null, '이탈·붙여넣기 기록 ' + leaves.length + '건'), h('div', { style: { fontSize: '12.5px', maxHeight: '140px', overflow: 'auto' } }, leaves)) : null,
     h('div', { class: 'body' }, rows),
     h('div', { class: 'btns' }, h('button', { class: 'btn', type: 'button', onclick: close }, '닫기'))));
@@ -1225,13 +1284,13 @@ function buildSheets(ex) {
   const items = ex.items; const conv = ex.conversion; const total = items.reduce((s, i) => s + i.pts, 0);
   const autoMax = items.filter((i) => i.mode === 'auto').reduce((s, i) => s + i.pts, 0), essMax = total - autoMax;
   const stName = { in_progress: '응시 중', submitted: '제출' }; const kindName = { student: '학생 제출', timeout: '시간 초과', teacher: '교사 제출' };
-  const s1 = [['학번', '이름', '반', '상태', '제출 시각', '제출 방식', '이탈 횟수', `자동채점(${autoMax})`, `서술형(${essMax})`, `원점수(${total})`, '환산 점수', '서술형 미채점 문항 수']];
+  const s1 = [['학번', '이름', '반', '상태', '제출 시각', '제출 방식', '이탈 횟수', '붙여넣기 횟수', `자동채점(${autoMax})`, `서술형(${essMax})`, `원점수(${total})`, '환산 점수', '서술형 미채점 문항 수']];
   const s2 = [['학번', '이름', ...items.map((i) => `${i.id}(${i.pts})`)]];
   const s3 = [['학번', '이름', '문항', '칸', '학생 답안']]; const s4 = [['학번', '이름', '문항', '메모']];
   for (const r of ex.rows) {
     const subm = r.status === 'submitted'; const a = sum(r.auto_scores), e = sum(r.essay_scores), raw = a + e;
     const ungr = items.filter((i) => i.mode === 'teacher' && r.essay_scores[i.id] == null).length;
-    s1.push([r.student_no, r.name, r.class_no, stName[r.status] || r.status, subm && r.submitted_at ? new Date(r.submitted_at).toLocaleString('ko-KR') : '', kindName[r.submit_kind] || '', r.leave_count, subm ? a : '', e, subm ? raw : '', subm ? (finalFromRaw(raw, conv) ?? '') : '', ungr]);
+    s1.push([r.student_no, r.name, r.class_no, stName[r.status] || r.status, subm && r.submitted_at ? new Date(r.submitted_at).toLocaleString('ko-KR') : '', kindName[r.submit_kind] || '', r.leave_count, r.paste_count || 0, subm ? a : '', e, subm ? raw : '', subm ? (finalFromRaw(raw, conv) ?? '') : '', ungr]);
     s2.push([r.student_no, r.name, ...items.map((i) => (i.mode === 'auto' ? (subm ? (r.auto_scores[i.id] ?? '') : '') : (r.essay_scores[i.id] ?? '')))]);
     for (const [k, v] of Object.entries(r.answers || {})) { const [iid, c] = k.split(':'); if (String(v).trim() !== '') s3.push([r.student_no, r.name, iid, c, v]); }
     for (const [iid, n] of Object.entries(r.essay_notes || {})) s4.push([r.student_no, r.name, iid, n]);
@@ -1265,6 +1324,113 @@ function tabExport(box) {
       h('button', { class: 'btn ghost', type: 'button', onclick: () => run('csv') }, '성적표 CSV'),
       h('button', { class: 'btn ghost', type: 'button', onclick: () => run('json') }, '전체 백업(JSON)')),
     note));
+}
+
+/* ============ 교사: 실시간 감독 (시험 중 켜 두는 화면) ============ */
+const MON = { cls: '', sound: false, sort: 'no', big: false, prev: new Map(), logs: [], flash: new Map(), baseline: false, ac: null, ok: true };
+const PCELLS = EXAM.problems.map((p) => ({ no: p.no, n: problemCells(p).length }));
+function beep() {
+  try { const c = MON.ac; if (!c) return; const o = c.createOscillator(), g = c.createGain(); o.type = 'sine'; o.frequency.value = 880; g.gain.value = 0.18; o.connect(g); g.connect(c.destination); o.start(); o.stop(c.currentTime + 0.22); } catch (e) { /* 소리 불가 환경 무시 */ }
+}
+function fmtDur(sec) { sec = Math.max(0, Math.round(sec)); return sec < 60 ? sec + '초' : Math.floor(sec / 60) + '분 ' + pad2(sec % 60) + '초'; }
+function lastOf(tail, kinds) { return [...(tail || [])].reverse().find((x) => kinds.includes(x.k)); }
+
+function monIngest(resp) {
+  const now = Date.now(); let warned = false;
+  const add = (r, type, text, warn) => {
+    MON.logs.unshift({ t: now, id: r.id, no: r.student_no, name: r.name, cls: r.class_no, type, text });
+    if (MON.logs.length > 300) MON.logs.length = 300;
+    if (warn) { MON.flash.set(r.id, now + 15000); warned = true; }
+  };
+  for (const r of resp.rows) {
+    const pv = MON.prev.get(r.id); const pres = r.presence || {};
+    if (MON.baseline && pv) {
+      if (r.leave_count > pv.leave_count) add(r, 'leave', `다른 창·탭으로 이동했습니다 (누적 ${r.leave_count}회)`, true);
+      if (r.paste_count > pv.paste_count) {
+        const pl = lastOf(r.log_tail, ['paste', 'drop']);
+        add(r, 'paste', `붙여넣기 감지${pl ? ` — ${String(pl.cell || '').replace(':', '번 문항 ')} 칸, ${pl.n}자` : ''} (누적 ${r.paste_count}회)`, true);
+      }
+      if (pv.away && !pres.away) { const bl = lastOf(r.log_tail, ['hidden', 'blur']); add(r, 'back', `시험 화면으로 복귀${bl && bl.ms ? ` (이탈 ${fmtDur(bl.ms / 1000)})` : ''}`, false); }
+      if (r.status === 'submitted' && pv.status !== 'submitted') add(r, 'done', '제출했습니다', false);
+    }
+    MON.prev.set(r.id, { leave_count: r.leave_count, paste_count: r.paste_count, away: !!pres.away, status: r.status });
+  }
+  MON.baseline = true;
+  if (warned && MON.sound) beep();
+}
+function monState(r, nowSrv) {
+  const pres = r.presence || {}; const idle = (nowSrv - Date.parse(r.last_saved)) / 1000;
+  if (r.status === 'submitted') return { k: 'done', label: '제출 완료', cls: 'g' };
+  if (pres.away) { const sec = (pres.away_ms || 0) / 1000 + (nowSrv - Date.parse(r.presence_at)) / 1000; return { k: 'away', label: '이탈 중 ' + fmtDur(sec) + (idle > 120 ? ' · 응답 없음' : ''), cls: 'r' }; }
+  if (idle > 75) return { k: 'lost', label: '응답 없음 ' + fmtDur(idle), cls: 'y' };
+  return { k: 'ok', label: '풀이 중', cls: 'g' };
+}
+function monCard(r, nowSrv, onOpen) {
+  const st = monState(r, nowSrv); const pres = r.presence || {};
+  const pct = Math.min(100, Math.round(100 * r.answered / TOTAL_CELLS));
+  const flash = (MON.flash.get(r.id) || 0) > Date.now();
+  const cell = pres.cell ? String(pres.cell).split(':')[1] : '';
+  const cur = r.status === 'submitted' ? `제출 ${fmtTime(r.last_saved)}` : pres.item ? `지금 ${pres.item}${cell ? ' · ' + cell : ''}` : '아직 입력 전';
+  const segs = PCELLS.map((p) => { const c = (r.by_problem || {})[p.no] || 0; return h('span', { class: 'seg', title: `문제 ${p.no}: ${c}/${p.n}칸` }, h('i', { style: { width: Math.round(100 * c / p.n) + '%' } })); });
+  return h('div', { class: `mcard s-${st.k}${flash ? ' flash' : ''}`, onclick: onOpen, title: '클릭하면 상세(이탈·붙여넣기 기록)' },
+    h('div', { class: 'mh' }, h('b', null, r.name), h('span', { class: 'mno' }, r.student_no), h('span', { class: 'chip ' + st.cls }, st.label)),
+    h('div', { class: 'mcur' }, cur),
+    h('div', { class: 'mbar' }, h('i', { style: { width: pct + '%' } })),
+    h('div', { class: 'mmeta' }, h('span', null, `${r.answered}/${TOTAL_CELLS}칸 (${pct}%)`), h('span', { class: 'sp' }), h('span', { class: 'segs' }, segs)),
+    h('div', { class: 'mchips' },
+      h('span', { class: 'chip ' + (r.leave_count ? (r.leave_count >= 3 ? 'r' : 'y') : 'g') }, `이탈 ${r.leave_count}`),
+      h('span', { class: 'chip ' + (r.paste_count ? 'r' : 'g') }, `붙여넣기 ${r.paste_count}`),
+      h('span', { class: 'mago' }, r.status === 'submitted' ? '' : '저장 ' + fmtDur((nowSrv - Date.parse(r.last_saved)) / 1000) + ' 전')));
+}
+
+async function tabMonitor(box) {
+  let data = null;
+  if (!MON.ac && MON.sound) { try { MON.ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { /* 무시 */ } }
+  const grid = h('div', { class: 'mgrid' }); const logBox = h('div', { class: 'mlog' }); const clsBar = h('div', { class: 'ge-row' }); const sumBar = h('div', { class: 'ge-row' });
+  const netChip = h('span', { class: 'chip g' }, '연결됨');
+  const sortSel = h('select', { class: 'in' }, [['no', '학번순'], ['warn', '경고 많은 순'], ['slow', '진행 느린 순'], ['away', '이탈 중 먼저']].map(([v, l]) => h('option', { value: v }, l)));
+  sortSel.value = MON.sort; sortSel.addEventListener('change', () => { MON.sort = sortSel.value; draw(); });
+  const snd = h('input', { type: 'checkbox', checked: MON.sound });
+  snd.addEventListener('change', () => { MON.sound = snd.checked; if (snd.checked) { try { MON.ac = MON.ac || new (window.AudioContext || window.webkitAudioContext)(); MON.ac.resume && MON.ac.resume(); beep(); } catch (e) { /* 무시 */ } } });
+  const big = h('input', { type: 'checkbox', checked: MON.big }); big.addEventListener('change', () => { MON.big = big.checked; grid.classList.toggle('big', MON.big); });
+  grid.classList.toggle('big', MON.big);
+  box.append(h('div', { class: 'panel' },
+    h('div', { class: 'ge-row' }, h('b', null, '실시간 감독'), netChip, h('span', { style: { color: 'var(--mute)', fontSize: '12.5px' } }, '3초마다 자동 갱신 · 이 탭을 열어 둔 동안 경고가 표시됩니다'),
+      h('span', { class: 'sp', style: { flex: 1 } }), h('label', { style: { fontSize: '13px' } }, snd, ' 경고음'), h('label', { style: { fontSize: '13px' } }, big, ' 큰 카드'), sortSel),
+    clsBar, sumBar),
+    h('div', { class: 'mon-wrap' }, grid, h('div', { class: 'panel mlogp' }, h('div', { class: 'ge-row' }, h('b', null, '경고·활동 기록'), h('button', { class: 'btn sm ghost', type: 'button', onclick: () => { MON.logs = []; draw(); } }, '지우기')), logBox)));
+
+  function draw() {
+    if (!data) return;
+    const nowSrv = Date.parse(data.server_now); const all = data.rows;
+    const classes = [...new Set(all.map((r) => r.class_no))].sort((a, b) => a - b);
+    if (MON.cls && !classes.includes(+MON.cls)) MON.cls = '';
+    clsBar.replaceChildren(h('button', { class: 'tab' + (!MON.cls ? ' on' : ''), type: 'button', onclick: () => { MON.cls = ''; draw(); } }, `전체 (${all.length})`),
+      ...classes.map((c) => {
+        const rs = all.filter((r) => r.class_no === c); const aw = rs.filter((r) => r.status !== 'submitted' && (r.presence || {}).away).length;
+        return h('button', { class: 'tab' + (String(MON.cls) === String(c) ? ' on' : ''), type: 'button', onclick: () => { MON.cls = String(c); draw(); } }, `${c}반 (${rs.length})`, aw ? h('span', { class: 'chip r', style: { marginLeft: '6px' } }, '이탈 ' + aw) : null);
+      }));
+    let rows = all.filter((r) => !MON.cls || String(r.class_no) === String(MON.cls));
+    const states = rows.map((r) => monState(r, nowSrv).k);
+    sumBar.replaceChildren(h('span', { class: 'chip b' }, `풀이 중 ${states.filter((k) => k === 'ok').length}`), h('span', { class: 'chip g' }, `제출 ${states.filter((k) => k === 'done').length}`),
+      h('span', { class: 'chip r' }, `이탈 중 ${states.filter((k) => k === 'away').length}`), h('span', { class: 'chip y' }, `응답 없음 ${states.filter((k) => k === 'lost').length}`),
+      h('span', { class: 'chip y' }, `누적 이탈 ${rows.reduce((a, r) => a + r.leave_count, 0)}`), h('span', { class: 'chip y' }, `누적 붙여넣기 ${rows.reduce((a, r) => a + r.paste_count, 0)}`),
+      h('span', { style: { color: 'var(--mute)', fontSize: '12.5px' } }, '갱신 ' + hhmmss(new Date())));
+    const warnN = (r) => r.leave_count + r.paste_count * 2;
+    if (MON.sort === 'warn') rows = rows.slice().sort((a, b) => warnN(b) - warnN(a) || a.student_no.localeCompare(b.student_no));
+    else if (MON.sort === 'slow') rows = rows.slice().sort((a, b) => (a.status === 'submitted') - (b.status === 'submitted') || a.answered - b.answered);
+    else if (MON.sort === 'away') rows = rows.slice().sort((a, b) => ((b.presence || {}).away && b.status !== 'submitted' ? 1 : 0) - ((a.presence || {}).away && a.status !== 'submitted' ? 1 : 0) || a.student_no.localeCompare(b.student_no));
+    grid.replaceChildren(...rows.map((r) => monCard(r, nowSrv, () => openDetail(r.id, null))));
+    if (!rows.length) grid.append(h('div', { class: 'msg info', style: { gridColumn: '1/-1' } }, '응시 중인 학생이 아직 없습니다. 학생이 입장하면 여기에 표시됩니다.'));
+    const logs = MON.logs.filter((l) => !MON.cls || String(l.cls) === String(MON.cls));
+    logBox.replaceChildren(...(logs.length ? logs.slice(0, 80).map((l) => h('div', { class: 'lg ' + l.type }, h('span', { class: 'lt' }, hhmmss(new Date(l.t))), h('b', null, `${l.name}`), h('span', { class: 'lno' }, `${l.cls}반 ${String(l.no).slice(3)}번`), h('div', { class: 'ltx' }, (l.type === 'leave' || l.type === 'paste' ? '⚠ ' : '') + l.text))) : [h('div', { style: { color: 'var(--mute)', fontSize: '13px' } }, '아직 기록이 없습니다.')]));
+  }
+  const poll = async () => {
+    try { const r = await tcall('t_monitor'); data = r; MON.ok = true; netChip.className = 'chip g'; netChip.textContent = '연결됨'; monIngest(r); draw(); }
+    catch (e) { if (e.message === '로그인 만료') return; netChip.className = 'chip r'; netChip.textContent = '연결 끊김 — 재시도 중'; }
+  };
+  await poll();
+  T.timer = setInterval(() => { if (T.tab === 'monitor') poll(); }, 3000);
 }
 
 /* ============ 시작 ============ */
