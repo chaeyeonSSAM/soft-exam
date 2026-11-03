@@ -1343,7 +1343,7 @@ function ilramPanel(box) {
 }
 
 /* ============ 교사 화면: 현황 · 서술형 채점 · 설정 · 내보내기 ============ */
-const T = { token: ssGet('mbexam_t'), tab: 'status', ov: null, timer: null, showArchived: false, classFilter: '', essayItem: null, onlyUngraded: false, showAll: false };
+const T = { token: ssGet('mbexam_t'), tab: 'status', ov: null, timer: null, showArchived: false, classFilter: '', essayItem: null, onlyUngraded: false, showAll: false, gradeClass: '', gradeView: 'item' };
 const TOTAL_CELLS = ITEMS.reduce((a, it) => a + cellsOfItem(it).length, 0);
 
 async function tcall(fn, p) {
@@ -1647,31 +1647,78 @@ async function tabGrade(box) {
   if (!T.essayItem || !teacherItems.some((i) => i.id === T.essayItem)) T.essayItem = teacherItems[0] && teacherItems[0].id;
   box.append(h('div', { class: 'msg info' }, '불러오는 중…'));
   let ex; try { ex = await tcall('t_export'); } catch (e) { box.replaceChildren(h('div', { class: 'msg err' }, e.message)); return; }
+  const clsOf = (r) => String(parseInt(String(r.student_no).slice(1, 3), 10));
   const draw = () => {
+    const classes = Array.from(new Set(ex.rows.map(clsOf))).sort((a, b) => a - b);
+    if (T.gradeClass && !classes.includes(T.gradeClass)) T.gradeClass = '';
+    const base = () => ex.rows.filter((r) => (T.showAll || r.status === 'submitted') && (!T.gradeClass || clsOf(r) === T.gradeClass));
+    const gradedCnt = (list, ids) => list.reduce((n, r) => n + ids.filter((id) => r.essay_scores[id] != null).length, 0);
+    const clsSel = h('select', { class: 'in' }, [h('option', { value: '' }, '전체 반'), ...classes.map((c) => h('option', { value: c }, c + '반'))]);
+    clsSel.value = T.gradeClass || ''; clsSel.addEventListener('change', () => { T.gradeClass = clsSel.value; draw(); });
+    const viewSel = h('select', { class: 'in' }, [h('option', { value: 'item' }, '문항별로 보기 (한 문항을 학생 전체)'), h('option', { value: 'student' }, '학생별로 보기 (한 학생의 서술형 전체)')]);
+    viewSel.value = T.gradeView || 'item'; viewSel.addEventListener('change', () => { T.gradeView = viewSel.value; draw(); });
+    const chkU = h('input', { type: 'checkbox', checked: T.onlyUngraded }); chkU.addEventListener('change', () => { T.onlyUngraded = chkU.checked; draw(); });
+    const chkA = h('input', { type: 'checkbox', checked: T.showAll }); chkA.addEventListener('change', () => { T.showAll = chkA.checked; draw(); });
+    const allIds = teacherItems.map((i) => i.id);
+    /* 반별 채점 현황 (여러 선생님이 나눠 채점할 때 남은 양을 한눈에) */
+    const submittedRows = ex.rows.filter((r) => r.status === 'submitted');
+    const clsChips = classes.map((c) => {
+      const rr = submittedRows.filter((r) => clsOf(r) === c); const tot = rr.length * allIds.length; const g = gradedCnt(rr, allIds);
+      return h('span', { class: 'chip ' + (g >= tot && tot ? 'g' : 'b'), style: { cursor: 'pointer' }, title: c + '반만 보기', onclick: () => { T.gradeClass = c; draw(); } }, `${c}반 ${g}/${tot}`);
+    });
+    const top = (extra) => h('div', { class: 'ge-row' }, h('b', null, '반'), clsSel, h('b', null, '보기'), viewSel, extra,
+      h('label', { style: { fontSize: '13px' } }, chkU, ' 미채점만'), h('label', { style: { fontSize: '13px' } }, chkA, ' 응시 중인 학생 포함'),
+      h('button', { class: 'btn sm ghost', type: 'button', onclick: () => { box.replaceChildren(); tabGrade(box); } }, '다시 불러오기'));
+    const chipRow = h('div', { class: 'ge-row', style: { fontSize: '12.5px' } }, h('span', { style: { color: 'var(--mute)' } }, '반별 채점(채점한 칸/전체 칸, 제출자 기준):'), clsChips);
+    const hint = h('div', { style: { fontSize: '12.5px', color: 'var(--mute)', margin: '6px 0' } }, `부분 점수 없음: 정답 점수 또는 오답 0점만 줄 수 있습니다. 채점 결과는 즉시 저장됩니다. 백지이거나 ${T.ov.settings.essay_min_chars ?? 10}자 이하인 답안은 제출 시 자동 0점이 되며 빨간 표시가 붙습니다(필요하면 다시 채점 가능).`);
+
+    if ((T.gradeView || 'item') === 'student') {
+      /* 학생별: 한 반(또는 전체)의 학생을 한 명씩, 서술형 문항을 모두 */
+      let list = base().slice().sort((a, b) => String(a.student_no).localeCompare(String(b.student_no)));
+      const prog = h('span', { class: 'chip b' }, `채점 ${gradedCnt(list, allIds)} / ${list.length * allIds.length}칸`);
+      const cards = [];
+      for (const r of list) {
+        const its = allIds.filter((id) => !T.onlyUngraded || r.essay_scores[id] == null);
+        if (!its.length) continue;
+        const card = h('div', { style: { borderTop: '2px solid var(--line)', padding: '12px 0' } }, h('div', { class: 'ge-row' }, h('b', { style: { fontSize: '15px' } }, `${r.student_no} ${r.name}`), r.status === 'submitted' ? null : h('span', { class: 'chip b' }, '응시 중'),
+          h('span', { style: { color: 'var(--mute)', fontSize: '12px' } }, r.leave_count ? `이탈 ${r.leave_count}회` : '')));
+        for (const id of its) {
+          const meta = ex.items.find((i) => i.id === id); const item = ITEM_BY_ID[id];
+          const st = { score: r.essay_scores[id] == null ? null : r.essay_scores[id], note: r.essay_notes[id] || '' };
+          card.append(h('div', { style: { margin: '8px 0 0', paddingLeft: '10px', borderLeft: '3px solid var(--line)' } },
+            h('div', { class: 'ge-row' }, h('b', null, `${id} (${meta.pts}점)`), /^자동 0점/.test(r.essay_notes[id] || '') && r.essay_scores[id] === 0 ? h('span', { class: 'chip r' }, r.essay_notes[id]) : null),
+            item.blocks.filter((b) => b.t === 'p' || b.t === 'essay').map((b) => b.t === 'p' ? h('p', { style: { margin: '2px 0', fontSize: '12.5px', color: 'var(--mute)' } }, b.text) : b.parts.map((p) => h('p', { style: { margin: '2px 0', fontWeight: 600, fontSize: '13px' } }, p.label))),
+            ...answerBlocks(id, r.answers || {}, (r.checks || {})[id]),
+            gradeControls(r.id, meta, st, (sc) => { r.essay_scores = Object.assign({}, r.essay_scores); if (sc == null) delete r.essay_scores[id]; else r.essay_scores[id] = sc; r.essay_notes = Object.assign({}, r.essay_notes, { [id]: st.note }); prog.textContent = `채점 ${gradedCnt(base(), allIds)} / ${base().length * allIds.length}칸`; })));
+        }
+        cards.push(card);
+      }
+      box.replaceChildren(h('div', { class: 'panel' }, top(prog), chipRow, hint,
+        h('details', null, h('summary', { style: { cursor: 'pointer', fontSize: '13px' } }, '채점 기준 보기(문항별)'), allIds.map((id) => h('div', { style: { margin: '6px 0' } }, h('b', null, id), rubricBox(ex.items.find((i) => i.id === id).rubric)))),
+        cards.length ? cards : h('div', { class: 'msg ok' }, T.onlyUngraded ? '미채점 답안이 없습니다.' : '제출된 답안이 아직 없습니다.')));
+      return;
+    }
+
+    /* 문항별 (기존 방식 + 반 필터) */
     const meta = ex.items.find((i) => i.id === T.essayItem); const item = meta && ITEM_BY_ID[meta.id];
     const sel = h('select', { class: 'in' }, teacherItems.map((i) => h('option', { value: i.id }, `${i.id} (${i.pts}점)`)));
     sel.value = T.essayItem; sel.addEventListener('change', () => { T.essayItem = sel.value; draw(); });
-    const chkU = h('input', { type: 'checkbox', checked: T.onlyUngraded }); chkU.addEventListener('change', () => { T.onlyUngraded = chkU.checked; draw(); });
-    const chkA = h('input', { type: 'checkbox', checked: T.showAll }); chkA.addEventListener('change', () => { T.showAll = chkA.checked; draw(); });
-    let rows = ex.rows.filter((r) => T.showAll || r.status === 'submitted');
-    const graded = rows.filter((r) => r.essay_scores[meta.id] != null).length;
-    const prog = h('span', { class: 'chip b' }, `채점 ${graded} / ${rows.length}명`);
+    let rows = base();
+    const prog = h('span', { class: 'chip b' }, `채점 ${rows.filter((r) => r.essay_scores[meta.id] != null).length} / ${rows.length}명`);
     if (T.onlyUngraded) rows = rows.filter((r) => r.essay_scores[meta.id] == null);
+    rows = rows.slice().sort((a, b) => String(a.student_no).localeCompare(String(b.student_no)));
     const cards = rows.map((r) => {
       const st = { score: r.essay_scores[meta.id] == null ? null : r.essay_scores[meta.id], note: r.essay_notes[meta.id] || '' };
       const card = h('div', { style: { borderTop: '1px solid var(--line)', padding: '10px 0' } });
       card.append(h('div', { class: 'ge-row' }, h('b', null, `${r.student_no} ${r.name}`), r.status === 'submitted' ? null : h('span', { class: 'chip b' }, '응시 중'), /^자동 0점/.test(r.essay_notes[meta.id] || '') && r.essay_scores[meta.id] === 0 ? h('span', { class: 'chip r' }, r.essay_notes[meta.id]) : null,
         h('span', { style: { color: 'var(--mute)', fontSize: '12px' } }, r.leave_count ? `이탈 ${r.leave_count}회` : '')),
         ...answerBlocks(meta.id, r.answers || {}, (r.checks || {})[meta.id]),
-        gradeControls(r.id, meta, st, (sc) => { r.essay_scores = Object.assign({}, r.essay_scores); if (sc == null) delete r.essay_scores[meta.id]; else r.essay_scores[meta.id] = sc; r.essay_notes = Object.assign({}, r.essay_notes, { [meta.id]: st.note }); prog.textContent = `채점 ${ex.rows.filter((q) => (T.showAll || q.status === 'submitted') && q.essay_scores[meta.id] != null).length} / ${ex.rows.filter((q) => T.showAll || q.status === 'submitted').length}명`; }));
+        gradeControls(r.id, meta, st, (sc) => { r.essay_scores = Object.assign({}, r.essay_scores); if (sc == null) delete r.essay_scores[meta.id]; else r.essay_scores[meta.id] = sc; r.essay_notes = Object.assign({}, r.essay_notes, { [meta.id]: st.note }); const bb = base(); prog.textContent = `채점 ${bb.filter((q) => q.essay_scores[meta.id] != null).length} / ${bb.length}명`; }));
       return card;
     });
-    box.replaceChildren(h('div', { class: 'panel' },
-      h('div', { class: 'ge-row' }, h('b', null, '문항'), sel, prog, h('label', { style: { fontSize: '13px' } }, chkU, ' 미채점만'), h('label', { style: { fontSize: '13px' } }, chkA, ' 응시 중인 학생 포함'),
-        h('button', { class: 'btn sm ghost', type: 'button', onclick: () => { box.replaceChildren(); tabGrade(box); } }, '다시 불러오기')),
+    box.replaceChildren(h('div', { class: 'panel' }, top(h('span', null, h('b', null, '문항 '), sel, ' ', prog)), chipRow,
       item.blocks.filter((b) => b.t === 'p' || b.t === 'essay').map((b) => b.t === 'p' ? h('p', { style: { margin: '4px 0' } }, b.text) : b.parts.map((p) => h('p', { style: { margin: '4px 0', fontWeight: 600 } }, p.label))),
-      rubricBox(meta.rubric),
-      h('div', { style: { fontSize: '12.5px', color: 'var(--mute)', margin: '6px 0' } }, `부분 점수 없음: 정답 ${meta.pts}점 또는 오답 0점만 줄 수 있습니다. 채점 결과는 즉시 저장됩니다. 백지이거나 ${T.ov.settings.essay_min_chars ?? 10}자(공백 제외) 이하인 답안은 제출 시 자동으로 0점 처리되어 있으며(빨간 표시), 필요하면 정답으로 바꿀 수 있습니다.`),
+      rubricBox(meta.rubric), hint,
       cards.length ? cards : h('div', { class: 'msg ok' }, T.onlyUngraded ? '미채점 답안이 없습니다.' : '제출된 답안이 아직 없습니다.')));
   };
   draw();
