@@ -222,7 +222,8 @@ const PYRT = "import ast, asyncio, json, sys, types, traceback, builtins\nimport
 const CONFIG = {
   SUPABASE_URL: 'https://rnlwtooibivnygqamzrm.supabase.co',      // ← Supabase 프로젝트 URL
   SUPABASE_ANON_KEY: 'sb_publishable_F6USYKXm2jxFuVmQaRmV4Q_7NKIVpOW',              // ← anon public 키 (service_role 키는 절대 넣지 마세요)
-  PYODIDE_URL: 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/',   // 파이썬 실행기(브라우저 안에서 동작)
+  PYODIDE_URL: './pyodide/',   // 파이썬 실행기(브라우저 안에서 동작). 이 html과 같은 곳의 pyodide 폴더를 가장 먼저 사용(권장: 접속이 몰려도 안정적)
+  PYODIDE_FALLBACKS: ['https://cdn.jsdelivr.net/pyodide/v0.26.4/full/', 'https://unpkg.com/pyodide@0.26.4/'],   // 위 주소가 안 될 때 차례로 시도
   XLSX_URL: 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js', // 엑셀 내보내기용
 };
 if (window.__TEST_CONFIG__) Object.assign(CONFIG, window.__TEST_CONFIG__);
@@ -249,7 +250,7 @@ const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
 function fmtTime(iso) { if (!iso) return '-'; const d = new Date(iso); return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
 function loadScript(src) {
   return new Promise((res, rej) => {
-    const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('스크립트를 불러오지 못했습니다: ' + src)); document.head.append(s);
+    const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => { s.remove(); rej(new Error('스크립트를 불러오지 못했습니다: ' + src)); }; document.head.append(s);
   });
 }
 function toast(msg, ms = 2400) {
@@ -296,7 +297,7 @@ const API = {
       } catch (e) {
         lastErr = e;
         if (e.server) throw e;                // 서버가 답한 오류는 재시도하지 않음
-        if (i < tries) await sleepMs(900 * (i + 1));
+        if (i < tries) await sleepMs(900 * (i + 1) + Math.random() * 800);   // 여러 학생이 동시에 재시도해도 몰리지 않게 무작위 간격
       }
     }
     const ne = new Error('NETWORK'); ne.network = true; ne.cause = lastErr; throw ne;
@@ -321,19 +322,77 @@ function selOptions(item, name) {
 }
 
 /* ============ 파이썬(Pyodide) 실행기 + 마이크로비트 시뮬레이터 ============ */
-const PY = { fn: null, loading: null };
+const PY = { fn: null, loading: null, preTimer: null, last: '' };
+function withTimeout(p, ms, what) {
+  let t; return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(what + ' 시간 초과')), ms); })]).finally(() => clearTimeout(t));
+}
+function pyBases() {
+  const out = [];
+  for (const u of [CONFIG.PYODIDE_URL].concat(CONFIG.PYODIDE_FALLBACKS || [])) {
+    if (!u) continue;
+    let b; try { b = new URL(u, location.href).href; } catch (e) { continue; }
+    if (!b.endsWith('/')) b += '/';
+    if (!out.includes(b)) out.push(b);
+  }
+  return out;
+}
+/* 실행기 파일(10MB 안팎)을 받는 도중 서버가 잠깐 바쁘다고(5xx/429) 하거나 끊겨도, 같은 요청을 간격을 두고 다시 보낸다.
+   (한 번 실패한 loadPyodide를 처음부터 다시 부르면 멈추는 경우가 있어, 실패를 loadPyodide 바깥으로 올리지 않는다.) */
+const _fetch0 = window.fetch.bind(window);
+async function fetchRetry(input, init, tries) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const res = await _fetch0(input, init);
+      if (res.ok || (res.status < 500 && res.status !== 429)) return res;
+      last = new Error('HTTP ' + res.status);
+    } catch (e) { last = e; }
+    if (i < tries - 1) await sleepMs(1000 * (i + 1) + Math.random() * 1500);
+  }
+  throw last;
+}
+let _pyFetchBase = null;
+function guardPyFetch(base) {
+  _pyFetchBase = base;
+  if (window.fetch.__pyGuard) return;
+  const f = (input, init) => {
+    const u = typeof input === 'string' ? input : (input && input.url) || '';
+    return _pyFetchBase && u.startsWith(_pyFetchBase) ? fetchRetry(input, init, 6) : _fetch0(input, init);
+  };
+  f.__pyGuard = true; window.fetch = f;
+}
+async function loadPyFrom(base) {
+  guardPyFetch(base);
+  if (typeof loadPyodide === 'undefined') await withTimeout(loadScript(base + 'pyodide.js'), 45000, 'pyodide.js 내려받기');
+  await withTimeout(fetchRetry(base + 'pyodide.asm.js', undefined, 6), 60000, 'pyodide.asm.js 내려받기');   // 브라우저 캐시에 먼저 받아 두면 import가 실패하지 않는다
+  const py = await withTimeout(loadPyodide({ indexURL: base }), 180000, '실행기 준비');
+  py.runPython(PYRT);
+  return py.globals.get('run_program');
+}
+/* 주소를 차례로(같은 곳 → CDN) 각 2번씩 시도. 접속이 몰릴 때를 위해 재시도 간격에 무작위를 섞는다. */
 function ensurePy(onStatus) {
   if (PY.fn) return Promise.resolve(PY.fn);
-  if (PY.loading) return PY.loading;
+  if (PY.loading) { onStatus && onStatus('파이썬 실행기를 불러오는 중… (처음 한 번만, 잠시 걸립니다)'); return PY.loading; }
   PY.loading = (async () => {
-    onStatus && onStatus('파이썬 실행기를 불러오는 중… (처음 한 번만, 몇 초 걸립니다)');
-    if (typeof loadPyodide === 'undefined') await loadScript(CONFIG.PYODIDE_URL + 'pyodide.js');
-    const py = await loadPyodide({ indexURL: CONFIG.PYODIDE_URL });
-    py.runPython(PYRT);
-    PY.fn = py.globals.get('run_program');
-    return PY.fn;
+    const bases = pyBases(), errs = [];
+    for (let bi = 0; bi < bases.length; bi++) {
+      for (let k = 1; k <= 2; k++) {
+        onStatus && onStatus(`파이썬 실행기를 불러오는 중… (처음 한 번만, 잠시 걸립니다${bi || k > 1 ? ` · 다시 시도 ${bi * 2 + k}/${bases.length * 2}` : ''})`);
+        try { PY.fn = await loadPyFrom(bases[bi]); PY.last = bases[bi]; return PY.fn; }
+        catch (e) {
+          errs.push(bases[bi].replace(/^https?:\/\//, '').slice(0, 40) + ' → ' + (e && e.message ? e.message : e));
+          if (k < 2 || bi < bases.length - 1) await sleepMs(1200 + Math.random() * 2800);
+        }
+      }
+    }
+    const err = new Error('PYODIDE_LOAD'); err.detail = errs.join('\n'); throw err;
   })().catch((e) => { PY.loading = null; throw e; });
   return PY.loading;
+}
+/* 시험 화면·로그인 화면에서 미리(학생마다 무작위 지연) 내려받아, 실행 버튼을 누를 때 한꺼번에 몰리지 않게 한다. */
+function preloadPy(minMs, maxMs) {
+  if (PY.fn || PY.loading || PY.preTimer) return;
+  PY.preTimer = setTimeout(() => { PY.preTimer = null; ensurePy().catch(() => {}); }, minMs + Math.random() * (maxMs - minMs));
 }
 
 let ACTIVE_SIM = null;
@@ -478,7 +537,7 @@ async function runBlock(sim, srcItem, srcBlock, runCfg) {
     sim.reset(); sim.setStatus('준비 중…');
     let runFn;
     try { runFn = await ensurePy((m) => sim.setStatus(m)); }
-    catch (e) { sim.printErr('파이썬 실행기를 불러오지 못했습니다.\n(인터넷 연결이나 학교 방화벽을 확인하세요. 답안 입력과 제출은 그대로 할 수 있습니다.)'); sim.setStatus('실행기 오류'); return; }
+    catch (e) { sim.printErr('파이썬 실행기를 불러오지 못했습니다.\n(접속이 몰렸거나 학교 네트워크가 막혀 있을 수 있습니다. 잠시 뒤 ▶ 실행을 다시 눌러 보세요. 계속 안 되면 새로고침(F5)해도 입력한 답안은 그대로 이어집니다. 답안 입력과 제출은 문제없이 할 수 있습니다.)' + (e && e.detail ? '\n[' + e.detail.split('\n').join(' / ') + ']' : '')); sim.setStatus('실행기 오류'); return; }
     const { code, offset } = buildProgram(srcItem, srcBlock, runCfg);
     const names = cellsOfBlock(srcBlock);
     let verdict = { all: true };
@@ -488,7 +547,7 @@ async function runBlock(sim, srcItem, srcBlock, runCfg) {
     } else if (names.length && S.feedback !== 'off' && S.token) {
       sim.setStatus('빈칸 확인 중…');
       const cells = {}; for (const n of names) cells[srcItem.id + ':' + n] = S.answers[srcItem.id + ':' + n] || '';
-      try { verdict = await API.rpc('check_blanks', { token: S.token, item: srcItem.id, only: names, cells }, { retries: 1 }); }
+      try { verdict = await API.rpc('check_blanks', { token: S.token, item: srcItem.id, only: names, cells }, { retries: 2 }); }
       catch (e) { sim.printErr('서버와 연결하지 못해 코드를 확인할 수 없습니다. 잠시 뒤 다시 실행해 보세요.'); sim.setStatus('연결 오류'); return; }
       if (verdict.error) { sim.printErr(verdict.error); sim.setStatus('오류'); return; }
       if (verdict.submitted) { sim.printErr('이미 제출되었습니다.'); return; }
@@ -554,6 +613,7 @@ async function renderHome() {
 /* ---------- 로그인 ---------- */
 async function renderLogin(notice) {
   stopStudentTimers();
+  preloadPy(500, 15000);   // 로그인하는 동안 파이썬 실행기를 미리 받아 둠(학생마다 시점을 분산)
   const last = (() => { try { return JSON.parse(lsGet(LS_LAST) || '{}'); } catch (e) { return {}; } })();
   const fNo = h('input', { type: 'text', inputmode: 'numeric', maxlength: 5, placeholder: '예) 20301', autocomplete: 'off', value: last.no || '' });
   const fName = h('input', { type: 'text', maxlength: 20, placeholder: '이름', autocomplete: 'off', value: last.name || '' });
@@ -777,6 +837,7 @@ function unansweredItems() {
 
 /* ---------- 시험 화면 ---------- */
 function renderExam() {
+  preloadPy(800, 12000);
   S.navEls = {};
   const timerEl = h('span', { class: 'timer', id: 'timer' }, '--:--');
   const saveEl = h('span', { class: 'save', id: 'saveStat' }, '');
@@ -820,6 +881,7 @@ async function saveNow() {
     if (r.error) { await handleSessionError(r.error); return; }
     if (r.submitted) { onServerSubmitted(r.timeout ? '응시 시간이 끝나 자동 제출되었습니다.' : '제출이 완료되었습니다.'); return; }
     if (r.server_now) S.skew = Date.parse(r.server_now) - Date.now();
+    adoptDeadline(r);
     S.dirty = JSON.stringify(S.answers) !== snap;
     setSaveUI('저장됨 ' + hhmmss(new Date()));
   } catch (e) {
@@ -839,6 +901,7 @@ async function heartbeat() {
     if (r.error) { await handleSessionError(r.error); return; }
     if (r.submitted) { onServerSubmitted(r.timeout ? '응시 시간이 끝나 자동 제출되었습니다.' : '제출이 완료되었습니다.'); return; }
     if (r.server_now) S.skew = Date.parse(r.server_now) - Date.now();
+    adoptDeadline(r);
   } catch (e) { setSaveUI('연결 확인 중…', true); }
 }
 async function handleSessionError(msg) {
@@ -859,6 +922,25 @@ async function handleSessionError(msg) {
 
 /* ---------- 타이머 · 이탈 기록 ---------- */
 function remainingMs() { return S.deadline - (Date.now() + S.skew); }
+/* 교사가 시간을 연장하면 저장·확인 응답에 새 마감시각이 실려 온다 → 타이머에 바로 반영 */
+function adoptDeadline(r) {
+  if (!r || !r.deadline) return;
+  const d = Date.parse(r.deadline);
+  if (!d || d === S.deadline) return;
+  const longer = d > S.deadline;
+  S.deadline = d; S.deadlineIso = r.deadline; S.warned = {};
+  lsSet(lsKey(), JSON.stringify({ deadline: S.deadlineIso, answers: S.answers, t: Date.now() }));
+  if (longer) toast('선생님이 시험 시간을 연장했습니다. 남은 시간 ' + fmtRemain(remainingMs()), 5000);
+}
+let _extChecking = false;
+async function confirmTimeout() {          // 시간이 0이 되어도 바로 제출하지 않고, 서버에서 연장 여부를 한 번 확인
+  if (_extChecking) return; _extChecking = true;
+  try {
+    const r = await API.rpc('ping', { token: S.token, leave_count: S.leave, paste_count: S.paste, presence: presencePayload() }, { retries: 0, timeout: 8000 });
+    if (r && r.deadline) { if (r.submitted) { onServerSubmitted('응시 시간이 끝나 자동 제출되었습니다.'); return; } adoptDeadline(r); if (remainingMs() > 0) return; }
+  } catch (e) { /* 연결 문제면 그대로 제출 진행 */ } finally { _extChecking = false; }
+  if (live() && !S.submitting && remainingMs() <= 0) doSubmit('timeout');
+}
 function fmtRemain(ms) {
   const s = Math.max(0, Math.ceil(ms / 1000)); const hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = s % 60;
   return (hh ? hh + ':' + pad2(mm) : pad2(mm)) + ':' + pad2(ss);
@@ -870,7 +952,7 @@ function updateTimer() {
   S.timerEl.classList.toggle('low', ms < 600000 && ms >= 180000);
   S.timerEl.classList.toggle('crit', ms < 180000);
   for (const m of [10, 5, 1]) if (ms <= m * 60000 && !S.warned[m] && ms > 0) { S.warned[m] = 1; toast(`남은 시간 ${m}분`, 3500); }
-  if (ms <= 0 && live() && !S.submitting) doSubmit('timeout');
+  if (ms <= 0 && live() && !S.submitting) confirmTimeout();
 }
 let leaveAt = null;
 function trimLog() { if (S.leaveLog.length > 280) S.leaveLog = S.leaveLog.slice(-280); }
@@ -1382,12 +1464,29 @@ async function tabStatus(box) {
   archChk.addEventListener('change', () => { T.showArchived = archChk.checked; load(); });
   box.append(h('div', { class: 'panel' },
     h('div', { class: 'ge-row' }, h('button', { class: 'btn sm', type: 'button', onclick: load }, '새로고침'), clsSel,
+      h('button', { class: 'btn sm ghost', type: 'button', onclick: () => extendFlow(null, true, load) }, '응시 중 전원 시간 연장'),
       h('label', { style: { fontSize: '13px' } }, archChk, ' 초기화된(보관) 기록도 보기'), summary),
     h('div', { class: 'scroll' }, h('table', { class: 'tbl' },
       h('thead', null, h('tr', null, ['학번', '이름', '상태', '입력', '시작', '마지막 저장', '이탈', '자동채점', '서술형', '원점수', '환산', ''].map((t) => h('th', null, t)))), tbody)),
     h('div', { style: { fontSize: '12px', color: 'var(--mute)', marginTop: '8px' } }, `입력 = 입력한 칸 수 / 전체 ${TOTAL_CELLS}칸 · 환산은 서술형 채점이 끝나야 확정됩니다(미확정은 *). 10초마다 자동 갱신됩니다.`)));
   await load();
   T.timer = setInterval(() => { if (document.hidden || T.tab !== 'status') return; if (!document.querySelector('.ov')) load(); }, 10000);
+}
+/* 시간 연장: 선택한 학생(또는 응시 중 전원)의 마감 시각을 늘린다. 시간 종료로 이미 제출된 학생은 다시 풀 수 있게 되돌린다. */
+async function extendFlow(rows, allRunning, reload) {
+  const inp = h('input', { type: 'number', min: 1, max: 180, value: 10, style: { width: '80px' } });
+  const subm = rows && rows.some((x) => x.status === 'submitted');
+  const body = h('div', null,
+    h('div', null, allRunning ? '지금 응시 중인 모든 학생의 시간을 늘립니다.' : `${rows.map((x) => x.student_no + ' ' + x.name).join(', ')} 학생의 시간을 늘립니다.`),
+    h('div', { class: 'ge-row', style: { margin: '10px 0' } }, '연장 시간 ', inp, ' 분'),
+    h('div', { class: 'msg info' }, '응시 중인 학생은 약 15초 안에 화면의 남은 시간이 자동으로 늘어납니다(새로고침 불필요). 이미 시간 종료로 제출된 학생은 다시 풀 수 있는 상태로 되돌리며, 학생이 새로고침 후 같은 학번·이름·반 코드로 다시 입장하면 입력한 답안이 그대로 복원됩니다.'),
+    subm ? h('div', { class: 'msg warn' }, '제출된 학생을 되돌리면 이미 매긴 서술형 점수와 교사 수정 점수 표시가 지워질 수 있습니다(제출 시 자동채점은 다시 계산됩니다).') : null);
+  if (!(await modal({ title: '시간 연장', body, buttons: [{ label: '취소', value: false, cls: 'ghost' }, { label: '연장하기', value: true }] }))) return;
+  const mins = Math.max(1, Math.min(180, parseInt(inp.value, 10) || 10));
+  try {
+    const r = await tcall('t_extend', allRunning ? { all_running: true, minutes: mins } : { ids: rows.map((x) => x.id), minutes: mins });
+    toast(`${r.count}명의 시간을 ${r.minutes}분 연장했습니다.`, 3600); reload();
+  } catch (e) { errToast(e); }
 }
 function statusRow(x, conv, reload) {
   const subm = x.status === 'submitted';
@@ -1400,6 +1499,7 @@ function statusRow(x, conv, reload) {
       if (!(await modal({ title: '강제 제출', body: `${x.student_no} ${x.name} 학생의 답안을 지금 제출 처리할까요?`, buttons: [{ label: '취소', value: false, cls: 'ghost' }, { label: '제출 처리', value: true }] }))) return;
       try { await tcall('t_force_submit', { id: x.id }); toast('제출 처리했습니다.'); reload(); } catch (e) { errToast(e); }
     } }, '강제제출') : null,
+    !x.archived ? h('button', { class: 'btn sm ghost', type: 'button', onclick: () => extendFlow([x], false, reload) }, '시간 연장') : null,
     !x.archived ? h('button', { class: 'btn sm ghost', type: 'button', onclick: async () => {
       if (!(await modal({ title: '응시 기록 초기화', body: h('div', null, `${x.student_no} ${x.name} 학생의 기록을 보관 처리하고, 처음부터 다시 응시할 수 있게 합니다.`, h('div', { class: 'msg info' }, '데이터는 삭제되지 않고 보관됩니다. (보관 기록 보기에서 확인 가능)')), buttons: [{ label: '취소', value: false, cls: 'ghost' }, { label: '초기화', value: true, cls: 'danger' }] }))) return;
       try { await tcall('t_reset', { id: x.id }); toast('초기화했습니다.'); reload(); } catch (e) { errToast(e); }
