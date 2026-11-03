@@ -210,6 +210,36 @@ select.blank{padding:1px 4px;cursor:pointer}
 .mlog .lg.leave .ltx,.mlog .lg.paste .ltx{color:var(--bad);font-weight:700} .mlog .lg.back .ltx{color:var(--mute)} .mlog .lg.done .ltx{color:var(--ok)}
 @media(max-width:1000px){.mon-wrap{grid-template-columns:1fr}.mlogp{position:static;max-height:none}}
 
+/* 채점 결과 화면 */
+.rv{display:inline-block;background:var(--blank);color:#1a1a1a;border-bottom:2px solid #d9a400;border-radius:5px;padding:1px 6px;margin:0 2px;font-size:13px;line-height:1.5;font-family:"JetBrains Mono","D2Coding","Consolas","Menlo","Noto Sans Mono CJK KR","Malgun Gothic",monospace;font-weight:600;white-space:pre-wrap;word-break:break-all}
+.rv.ok{background:#c9f0dc;border-color:#12805c;color:#0b5a40} .rv.bad{background:#ffd3d0;border-color:#c2332b;color:#8f1d17}
+.rv.empty{font-style:italic;font-weight:400;opacity:.85}
+.rv.tb{display:block;margin:0;padding:6px 8px;font-size:13.5px}
+.rv-wrap{display:inline-flex;flex-direction:column;vertical-align:top;align-items:flex-start;gap:1px}
+.rv-key{display:block;background:var(--ok-l);color:var(--ok);border-radius:5px;padding:0 7px;font-size:12px;font-weight:700;margin:1px 2px;line-height:1.5;font-family:inherit;white-space:pre-wrap}
+.item-h .sp{flex:1}
+.rv-score{font-weight:800;font-size:13.5px;padding:2px 10px;border-radius:999px}
+.rv-score.good{background:var(--ok-l);color:var(--ok)} .rv-score.bad{background:var(--bad-l);color:var(--bad)} .rv-score.part{background:var(--warn-l);color:var(--warn)}
+.rvitem.good{border-left:4px solid var(--ok)} .rvitem.bad{border-left:4px solid var(--bad)} .rvitem.part{border-left:4px solid var(--warn)}
+.rv-sum{font-size:13px;color:var(--mute);margin:2px 0 6px}
+.rv-note{background:var(--brand-l);color:var(--brand-d);border-radius:10px;padding:8px 12px;font-size:13.5px;margin:6px 0}
+.rv-rubric{background:#f7f8fb;border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:13px;margin:6px 0} .rv-rubric ul{margin:4px 0 0;padding-left:18px}
+.rv-essay{white-space:pre-wrap;background:#fffbea;border:1px solid #f0dc8a;border-radius:10px;padding:10px 12px;line-height:1.7;word-break:break-word}
+.rv-essay.empty{color:var(--mute);font-style:italic}
+.rv-card{background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);padding:20px 22px;margin-bottom:22px}
+.rv-hero{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:14px 0}
+.rv-box{border:1.5px solid var(--line);border-radius:14px;padding:12px 16px;text-align:center}
+.rv-box .lb{font-size:12.5px;color:var(--mute);font-weight:700}
+.rv-box .big{font-size:34px;font-weight:800;line-height:1.2;font-variant-numeric:tabular-nums} .rv-box .big small{font-size:15px;color:var(--mute);font-weight:600}
+.rv-box.fin{background:var(--brand-l);border-color:var(--brand)} .rv-box.fin .big{color:var(--brand-d)}
+.rv-tbl{max-width:560px;margin:8px 0} .rv-tbl td.ok{color:var(--ok);font-weight:800} .rv-tbl td.bad{color:var(--bad);font-weight:800} .rv-tbl td{white-space:normal}
+.onlywrong .item.good,.onlywrong .prob.allgood{display:none}
+.onlywrong .item.bad:last-child,.onlywrong .item.part:last-child{border-radius:0 0 var(--r) var(--r)}
+@media (max-width:640px){.rv-hero{grid-template-columns:1fr 1fr 1fr;gap:6px}.rv-box{padding:8px 4px}.rv-box .big{font-size:24px}}
+.rc-res{margin-top:14px}
+.kv label.chk{font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.top .btn{white-space:nowrap;flex:none}
+
 </style>
 </head>
 <body>
@@ -586,7 +616,7 @@ const S = {
   answers: {}, feedback: 'error', minutes: 45,
   deadline: 0, skew: 0, leave: 0, leaveLog: [], paste: 0, cur: '', curCell: '', again: false,
   dirty: false, saving: false, submitted: false, submitting: false,
-  sims: [], refreshers: [], timers: [], navEls: {}, warned: {},
+  sims: [], refreshers: [], timers: [], navEls: {}, warned: {}, review: null,
 };
 const LS_LAST = 'mbexam_last_v1';
 const lsKey = () => 'mbexam_ans_v1_' + S.no;
@@ -594,25 +624,34 @@ const live = () => !!S.token && !S.submitted;
 
 /* ---------- 첫 화면: 수행평가 목록 ---------- */
 async function renderHome() {
-  stopStudentTimers();
+  stopStudentTimers(); S.review = null;
   const m = EXAM.meta;
+  const cfgP = API.configured() ? API.rpc('public_config', {}, { timeout: 8000 }).catch(() => null) : Promise.resolve(null);
+  const resBox = h('div', { class: 'rc-res hide' });
   const cards = m.rounds.map((r) => {
     const stat = h('div', { class: 'rstat' }, r.ready ? '' : '준비 중입니다');
     const card = h('div', { class: 'rcard' + (r.ready ? '' : ' off') },
       h('div', { class: 'rno' }, r.no + '차 수행평가'), h('div', { class: 'rttl' }, r.title), stat,
       r.ready ? h('button', { class: 'btn block', type: 'button', onclick: () => { location.hash = '#' + r.no; } }, '입장하기') : h('button', { class: 'btn block', type: 'button', disabled: true }, '준비 중'));
-    if (r.ready && API.configured()) API.rpc('public_config', {}, { timeout: 8000 }).then((c) => { if (c) stat.replaceChildren(h('span', { class: 'status-dot ' + (c.open ? 'on' : 'off') }), c.open ? '응시 접수 중' : '아직 시작 전이거나 종료되었습니다'); }).catch(() => {});
+    if (r.ready) cfgP.then((c) => { if (c) stat.replaceChildren(h('span', { class: 'status-dot ' + (c.open ? 'on' : 'off') }), c.open ? '응시 접수 중' : '아직 시작 전이거나 종료되었습니다'); });
     return card;
+  });
+  cfgP.then((c) => {
+    if (c && c.results_open && resBox.isConnected) {
+      resBox.classList.remove('hide');
+      resBox.append(h('div', { class: 'msg ok', style: { margin: '0 0 8px' } }, '1차 수행평가 채점 결과가 공개되었습니다.'),
+        h('button', { class: 'btn block', type: 'button', onclick: () => { location.hash = '#result'; } }, '내 채점 결과 확인 (총점·환산 점수)'));
+    }
   });
   setScreen(h('div', { class: 'center' }, h('div', { class: 'login home' },
     h('div', { class: 'school' }, m.school), h('h1', null, m.course + ' 수행평가'), h('div', { class: 'sub' }, '응시할 수행평가를 선택하세요.'),
-    h('div', { class: 'rlist' }, cards),
+    h('div', { class: 'rlist' }, cards), resBox,
     h('div', { class: 'foot' }, h('a', { href: '#teacher' }, '교사용')))));
 }
 
 /* ---------- 로그인 ---------- */
 async function renderLogin(notice) {
-  stopStudentTimers();
+  stopStudentTimers(); S.review = null;
   preloadPy(500, 15000);   // 로그인하는 동안 파이썬 실행기를 미리 받아 둠(학생마다 시점을 분산)
   const last = (() => { try { return JSON.parse(lsGet(LS_LAST) || '{}'); } catch (e) { return {}; } })();
   const fNo = h('input', { type: 'text', inputmode: 'numeric', maxlength: 5, placeholder: '예) 20301', autocomplete: 'off', value: last.no || '' });
@@ -678,6 +717,7 @@ function readLocalBackup(deadlineIso) {
   return null;
 }
 async function beginExam(r) {
+  S.review = null;
   S.submitted = false; S.submitting = false; S.dirty = false; S.warned = {}; S.sims = []; S.refreshers = [];
   const local = r.resumed ? readLocalBackup(r.deadline) : null;
   applyServerSession(r, local);
@@ -707,6 +747,7 @@ function scheduleLocal() {
 }
 
 function cellNode(item, name, selName, opt = {}) {
+  if (S.review) return reviewCell(item, name, opt);   // 채점 결과 화면: 읽기 전용 + 정오 표시
   const id = cellId(item, name);
   if (selName && selName !== 'q') {
     const sel = h('select', { class: opt.table ? 'in' : 'blank', 'data-cell': id, 'aria-label': name });
@@ -781,7 +822,7 @@ function renderBlock(item, b) {
     case 'code': {
       const box = h('div', { class: 'code' }, h('span', { class: 'ttl' }, b.title || 'Python 코드'),
         b.lines.map((l) => codeLine(l, (n, sel) => cellNode(item, n, sel))));
-      return b.run ? h('div', null, box, mountSim(item, b, b.run), runNote()) : box;
+      return b.run && !S.review ? h('div', null, box, mountSim(item, b, b.run), runNote()) : box;
     }
     case 'ref': {
       const src = ITEM_BY_ID[b.item]; const cb = getCodeBlock(src, b.code);
@@ -794,9 +835,10 @@ function renderBlock(item, b) {
           }));
       };
       S.refreshers.push(draw); draw();
-      return b.run ? h('div', null, box, mountSim(src, cb, b.run), runNote()) : box;
+      return b.run && !S.review ? h('div', null, box, mountSim(src, cb, b.run), runNote()) : box;
     }
-    case 'essay': return h('div', null, b.parts.map((p) => {
+    case 'essay': if (S.review) return reviewEssay(item, b);
+      return h('div', null, b.parts.map((p) => {
       const id = cellId(item, p.c);
       const ta = h('textarea', { class: 'in', 'data-cell': id, maxlength: 3000, placeholder: '여기에 답을 쓰세요', value: getAns(id) });
       const cnt = h('div', { class: 'cnt' }, getAns(id).length + '자');
@@ -1057,6 +1099,127 @@ function onServerSubmitted(text) {
     h('div', { class: 'sub' }, `${S.no} ${S.name} · ${when.getFullYear()}.${pad2(when.getMonth() + 1)}.${pad2(when.getDate())} ${hhmmss(when)}`),
     h('div', { class: 'msg info', style: { textAlign: 'left' } }, '수고했습니다. 점수는 선생님이 채점한 뒤 안내합니다. 이 창은 닫아도 됩니다.'),
     h('button', { class: 'btn ghost', type: 'button', onclick: () => { Object.assign(S, { token: null, answers: {}, code: '' }); renderHome(); } }, '처음 화면으로'))));
+}
+
+/* ============ 채점 결과 확인 (학생): 학번·이름·반 코드로 로그인 → 내 총점·환산 점수·틀린 칸 확인 ============ */
+function leaveResult() { S.review = null; S.answers = {}; S.refreshers = []; S.sims = []; if (location.hash) location.hash = ''; else renderHome(); }
+
+async function renderResultLogin(notice) {
+  stopStudentTimers(); S.review = null;
+  const last = (() => { try { return JSON.parse(lsGet(LS_LAST) || '{}'); } catch (e) { return {}; } })();
+  const fNo = h('input', { type: 'text', inputmode: 'numeric', maxlength: 5, placeholder: '예) 20301', autocomplete: 'off', value: last.no || '' });
+  const fName = h('input', { type: 'text', maxlength: 20, placeholder: '이름', autocomplete: 'off', value: last.name || '' });
+  const fCode = h('input', { type: 'text', maxlength: 40, placeholder: '시험 때 사용한 우리 반 코드', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
+  const msg = h('div'); const stat = h('div', { class: 'sub', style: { marginBottom: '14px' } }, '');
+  const btn = h('button', { class: 'btn block', type: 'button' }, '내 채점 결과 보기');
+  const showMsg = (t, cls = 'err') => msg.replaceChildren(t ? h('div', { class: 'msg ' + cls }, t) : '');
+  if (notice) showMsg(notice, 'warn');
+  const go = async () => {
+    const no = fNo.value.trim(), name = fName.value.trim(), code = fCode.value.trim();
+    if (!/^\d{5}$/.test(no)) return showMsg('학번은 숫자 5자리로 입력하세요. (예: 2학년 3반 1번 → 20301)');
+    if (!name) return showMsg('이름을 입력하세요.');
+    if (!code) return showMsg('반 코드를 입력하세요.');
+    if (!API.configured()) return showMsg('사이트 설정이 아직 끝나지 않았습니다.');
+    btn.disabled = true; btn.textContent = '확인 중…'; showMsg('');
+    try {
+      const r = await API.rpc('student_result', { student_no: no, name, code }, { retries: 1 });
+      if (r.error) { showMsg(r.error); return; }
+      lsSet(LS_LAST, JSON.stringify({ no, name }));
+      renderResult(r);
+    } catch (e) {
+      showMsg(e.network ? '서버에 연결하지 못했습니다. 인터넷 연결을 확인하고 다시 시도하세요.' : ('오류: ' + e.message));
+    } finally { btn.disabled = false; btn.textContent = '내 채점 결과 보기'; }
+  };
+  btn.addEventListener('click', go);
+  [fNo, fName, fCode].forEach((i) => i.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); }));
+  setScreen(h('div', { class: 'center' }, h('div', { class: 'login' },
+    h('div', { class: 'school' }, EXAM.meta.school + ' · ' + EXAM.meta.round + '차 수행평가'),
+    h('h1', null, '채점 결과 확인'),
+    h('div', { class: 'sub' }, EXAM.meta.title),
+    stat,
+    h('div', { class: 'fld' }, h('label', null, '학번'), fNo, h('div', { class: 'hint' }, '학년(1)+반(2)+번호(2) = 5자리')),
+    h('div', { class: 'fld' }, h('label', null, '이름'), fName),
+    h('div', { class: 'fld' }, h('label', null, '반 코드'), fCode, h('div', { class: 'hint' }, '시험 볼 때 선생님이 알려 준 우리 반 코드를 입력하세요.')),
+    msg, btn,
+    h('div', { class: 'foot' }, h('a', { href: '#' }, '← 수행평가 목록')))));
+  if (!last.no) fNo.focus(); else if (!last.name) fName.focus(); else fCode.focus();
+  if (API.configured()) {
+    try {
+      const c = await API.rpc('public_config', {}, { timeout: 8000 });
+      if (c && stat.isConnected) stat.replaceChildren(h('span', { class: 'status-dot ' + (c.results_open ? 'on' : 'off') }), c.results_open ? '채점 결과 확인 가능' : '아직 채점 결과가 공개되지 않았습니다');
+    } catch (e) { /* 상태 표시는 선택 사항 */ }
+  }
+}
+
+/* 결과 화면에서 빈칸 하나를 그리는 방식(시험 화면의 cellNode가 S.review 가 있으면 이 함수를 쓴다) */
+function reviewCell(item, name, opt = {}) {
+  const id = cellId(item, name), v = String(S.answers[id] || '');
+  const res = S.review.byId[item.id]; const st = res && res.cells ? res.cells[name] : undefined;
+  const key = res && res.keys ? res.keys[name] : null;
+  const cls = 'rv' + (st === true ? ' ok' : st === false ? ' bad' : '') + (v.trim() ? '' : ' empty') + (opt.table ? ' tb' : '');
+  const mark = st === true ? ' ✓' : st === false ? ' ✗' : '';
+  const n = h('span', { class: cls, title: name }, v.trim() ? v : '(빈칸)', mark);
+  if (st === false && key) return h('span', { class: 'rv-wrap' }, n, h('span', { class: 'rv-key' }, '정답: ' + key));
+  return n;
+}
+function reviewEssay(item, b) {
+  return h('div', null, b.parts.map((p) => h('div', { class: 'essay-part' }, h('label', null, p.label),
+    h('div', { class: 'rv-essay' + (String(S.answers[cellId(item, p.c)] || '').trim() ? '' : ' empty') }, String(S.answers[cellId(item, p.c)] || '').trim() ? S.answers[cellId(item, p.c)] : '(작성하지 않음)'))));
+}
+function reviewItem(item, res) {
+  const full = res.got >= res.pts, none = res.got <= 0;
+  const state = full ? 'good' : none ? 'bad' : 'part';
+  const wrongN = res.mode === 'auto' ? Object.values(res.cells || {}).filter((x) => x === false).length : 0;
+  const head = h('div', { class: 'item-h' }, h('span', { class: 'no' }, item.id),
+    h('span', { class: 'pts' }, item.pts + '점'),
+    item.mode === 'teacher' ? h('span', { class: 'chip y' }, '서술형') : null,
+    res.adjusted ? h('span', { class: 'chip' }, '선생님이 점수 조정') : null,
+    h('span', { class: 'sp' }),
+    h('span', { class: 'rv-score ' + state }, `${res.got} / ${res.pts}점 ${full ? '✓' : none ? '✗' : '△'}`));
+  const extra = [];
+  if (res.mode === 'auto' && !full && wrongN) extra.push(h('div', { class: 'rv-sum' }, `틀린 칸 ${wrongN}개 — 빨간색 ✗ 표시를 확인하세요.` + (S.review.showKey ? '' : ' (정답은 공개되지 않습니다)')));
+  if (res.mode === 'auto' && res.adjusted) extra.push(h('div', { class: 'rv-sum' }, '선생님이 이 문항의 점수를 직접 조정했습니다. 칸별 표시와 점수가 다를 수 있습니다.'));
+  if (res.note) extra.push(h('div', { class: 'rv-note' }, h('b', null, '선생님 메모 '), res.note));
+  if (res.rubric && res.rubric.length) extra.push(h('div', { class: 'rv-rubric' }, h('b', null, '채점 기준'), h('ul', null, res.rubric.map((x) => h('li', null, x)))));
+  return h('div', { class: 'item rvitem ' + state, id: 'it-' + item.id }, head, extra, item.blocks.map((b) => renderBlock(item, b)));
+}
+
+function renderResult(r) {
+  S.review = { byId: Object.fromEntries(r.items.map((i) => [i.id, i])), showKey: !!r.show_key };
+  S.answers = Object.assign({}, r.answers || {}); S.refreshers = []; S.sims = []; S.token = null;
+  const when = r.submitted_at ? new Date(r.submitted_at) : null;
+  const probSum = EXAM.problems.map((p) => {
+    const its = p.items.map((i) => S.review.byId[i.id]).filter(Boolean);
+    return { p, got: its.reduce((a, x) => a + x.got, 0), max: its.reduce((a, x) => a + x.pts, 0), allGood: its.every((x) => x.got >= x.pts) };
+  });
+  const wrongCnt = r.items.filter((i) => i.got < i.pts).length;
+  const top = h('div', { class: 'top' }, h('span', { class: 'ttl' }, '채점 결과 · ' + EXAM.meta.title), h('span', { class: 'sp' }),
+    h('span', { class: 'who' }, `${r.student_no} ${r.name}`),
+    h('button', { class: 'btn sm ghost', type: 'button', onclick: leaveResult }, '나가기'));
+  const summary = h('div', { class: 'rv-hero' },
+    h('div', { class: 'rv-box' }, h('div', { class: 'lb' }, '원점수'), h('div', { class: 'big' }, r.raw, h('small', null, ' / ' + r.max))),
+    h('div', { class: 'rv-box fin' }, h('div', { class: 'lb' }, '환산 점수'), h('div', { class: 'big' }, r.final == null ? '-' : r.final, h('small', null, ' 점'))),
+    h('div', { class: 'rv-box' }, h('div', { class: 'lb' }, '만점이 아닌 문항'), h('div', { class: 'big' }, wrongCnt, h('small', null, ' / ' + r.items.length))));
+  const onlyBtn = h('button', { class: 'btn sm ghost', type: 'button' }, '틀린 문항만 보기');
+  const wrap = h('div', { class: 'main' });
+  onlyBtn.addEventListener('click', () => { const on = wrap.classList.toggle('onlywrong'); onlyBtn.textContent = on ? '전체 문항 보기' : '틀린 문항만 보기'; });
+  const tbl = h('table', { class: 'tbl rv-tbl' }, h('thead', null, h('tr', null, h('th', null, '문제'), h('th', null, '득점'), h('th', null, '만점'))),
+    h('tbody', null, probSum.map((x) => h('tr', null, h('td', null, `문제 ${x.p.no}. ${x.p.title}`), h('td', { class: x.allGood ? 'ok' : 'bad' }, String(x.got)), h('td', null, String(x.max))))));
+  wrap.append(
+    h('div', { class: 'rv-card' }, h('h2', { style: { margin: '0 0 10px' } }, `${r.name} 학생의 결과`),
+      h('div', { class: 'sub' }, `${r.student_no}` + (when ? ` · 제출 ${when.getFullYear()}.${pad2(when.getMonth() + 1)}.${pad2(when.getDate())} ${hhmmss(when)}` : '')),
+      summary, tbl,
+      h('div', { class: 'msg info' }, '노란 칸이 내가 쓴 답입니다. ✓ 은 정답, ✗ 는 오답이며, 빨간 칸 아래의 "정답"은 선생님이 공개한 경우에만 표시됩니다. 점수 이의가 있으면 선생님께 문의하세요.'),
+      h('div', { class: 'ge-row' }, onlyBtn)),
+    ...EXAM.problems.map((p, pi) => h('section', { class: 'prob' + (probSum[pi].allGood ? ' allgood' : ''), id: 'p' + p.no },
+      h('div', { class: 'prob-h' }, h('h2', null, `문제 ${p.no}. ${p.title}`), p.intro ? h('div', { class: 'intro' }, p.intro) : null),
+      p.items.map((it) => reviewItem(it, S.review.byId[it.id])))));
+  const nav = h('div', { class: 'side' }, h('div', { class: 'box' },
+    probSum.map((x) => h('a', { href: '#p' + x.p.no, class: x.allGood ? 'done' : '', onclick: (e) => { e.preventDefault(); const t = document.getElementById('p' + x.p.no); if (t) t.scrollIntoView({ behavior: 'smooth' }); } },
+      h('span', null, '문제 ' + x.p.no), h('span', { class: 'c' }, `${x.got}/${x.max}`))),
+    h('div', { class: 'legend' }, '초록색 = 만점')));
+  setScreen(h('div', null, top, h('div', { class: 'layout' }, nav, wrap)));
+  window.scrollTo(0, 0);
 }
 
 /* ============ 엑셀(.xlsx) 파일 생성기 (외부 라이브러리 없음) ============
@@ -1768,6 +1931,50 @@ function tabSettings(box) {
   } }, '설정 저장');
   box.append(h('div', { class: 'panel' }, h('h3', null, '시험 상태'),
     h('div', { class: 'ge-row' }, h('label', { class: 'sw' }, sw, h('span')), h('b', null, '응시 열기'), h('span', { style: { color: 'var(--mute)', fontSize: '13px' } }, '켜 두면 접속코드를 아는 학생이 입장할 수 있습니다. 시험이 끝나면 꺼 두세요.'))));
+  /* 채점 결과 공개 */
+  const rsw = h('input', { type: 'checkbox', checked: !!s.results_open });
+  const rCls = h('input', { class: 'in', type: 'text', placeholder: '비우면 전체 반 (예: 1,2,3)', value: (s.results_classes || []).join(','), style: { width: '200px' }, autocomplete: 'off' });
+  const rKey = h('input', { type: 'checkbox', checked: !!s.results_show_key });
+  const rNote = h('input', { type: 'checkbox', checked: !!s.results_show_notes });
+  const rInfo = h('div'); const rUrl = location.href.split('#')[0] + '#result';
+  const parseCls = () => rCls.value.split(/[\s,，、]+/).filter(Boolean).map((x) => parseInt(x, 10)).filter((x) => x >= 1 && x <= 99);
+  const resPayload = () => ({ results_open: rsw.checked, results_show_key: rKey.checked, results_show_notes: rNote.checked, results_classes: parseCls() });
+  const pendInfo = async () => {
+    try {
+      const L = await tcall('t_list');
+      const sub = L.rows.filter((x) => x.status === 'submitted'), run = L.rows.filter((x) => x.status !== 'submitted');
+      const pend = sub.filter((x) => x.essay_graded < x.essay_count);
+      const cls = parseCls();
+      const inScope = (x) => !cls.length || cls.includes(x.class_no);
+      const pendIn = pend.filter(inScope), runIn = run.filter(inScope);
+      rInfo.replaceChildren(
+        h('div', { class: 'msg ' + (pendIn.length ? 'warn' : 'ok') }, `공개 대상 제출 ${sub.filter(inScope).length}명 중 서술형 채점이 끝나지 않은 학생 ${pendIn.length}명` + (pendIn.length ? ' — 이 학생들은 채점이 끝날 때까지 "채점이 아직 끝나지 않았습니다" 안내만 보게 됩니다(부분 점수는 노출되지 않음). ' + pendIn.slice(0, 8).map((x) => x.student_no + ' ' + x.name).join(', ') + (pendIn.length > 8 ? ' 외' : '') : ' — 모두 채점 완료')),
+        runIn.length ? h('div', { class: 'msg warn' }, `아직 제출하지 않은(응시 중인) 학생 ${runIn.length}명은 결과를 볼 수 없습니다.`) : null);
+    } catch (e) { rInfo.replaceChildren(h('div', { class: 'msg err' }, '현황을 불러오지 못했습니다: ' + e.message)); }
+  };
+  const saveRes = async (quiet) => {
+    await tcall('t_save_settings', { settings: resPayload() });
+    T.ov = await tcall('t_overview');
+    if (!quiet) toast('채점 결과 공개 설정을 저장했습니다.', 2800);
+    pendInfo();
+  };
+  rsw.addEventListener('change', async () => {
+    if (rsw.checked && !parseCls().length && !(await modal({ title: '채점 결과를 공개할까요?', body: h('div', null, h('p', null, '전체 반 학생이 [학번+이름+반 코드]로 로그인하면 자기 결과(총점·환산 점수·틀린 칸)를 볼 수 있습니다.'), h('p', { style: { color: 'var(--mute)', fontSize: '13px' } }, '아직 시험을 보지 않은 반이 있다면 아래 [공개할 반]에 반 번호를 적어 해당 반만 먼저 공개하세요. 문제 유출 우려가 있습니다.')), buttons: [{ label: '취소', value: false, cls: 'ghost' }, { label: '공개하기', value: true }] }))) { rsw.checked = false; return; }
+    try { await saveRes(true); toast(rsw.checked ? '채점 결과를 공개했습니다. 학생 첫 화면에 [내 채점 결과 확인] 버튼이 나타납니다.' : '채점 결과 공개를 중단했습니다.', 3600); }
+    catch (e) { rsw.checked = !rsw.checked; errToast(e); }
+  });
+  box.append(h('div', { class: 'panel' }, h('h3', null, '채점 결과 공개'),
+    h('div', { class: 'ge-row' }, h('label', { class: 'sw' }, rsw, h('span')), h('b', null, '채점 결과 공개'), h('span', { style: { color: 'var(--mute)', fontSize: '13px' } }, '켜면 학생이 [학번+이름+반 코드]로 로그인해 자기 총점·환산 점수·틀린 칸을 볼 수 있습니다. 응시가 모두 끝나고 채점을 마친 뒤에 켜세요.')),
+    h('div', { class: 'kv', style: { marginTop: '10px' } },
+      h('label', null, '공개할 반'), h('div', null, rCls, h('div', { style: { fontSize: '12px', color: 'var(--mute)', marginTop: '3px' } }, '시험 일정이 반마다 다르면, 모든 반의 시험이 끝난 뒤 공개하거나 끝난 반만 적어 먼저 공개하세요.')),
+      h('label', null, '정답 함께 공개'), h('div', null, h('label', { class: 'chk' }, rKey, ' 틀린 칸 아래에 정답, 서술형 문항에는 채점 기준·예시 답안을 표시'), h('div', { style: { fontSize: '12px', color: 'var(--mute)', marginTop: '3px' } }, '꺼 두면(권장) 어느 칸이 틀렸는지만 보여 줍니다. 아직 시험 보지 않은 반이 있으면 켜지 마세요.')),
+      h('label', null, '교사 메모 공개'), h('div', null, h('label', { class: 'chk' }, rNote, ' 서술형 채점 때 적은 메모를 학생에게 표시'), h('div', { style: { fontSize: '12px', color: 'var(--mute)', marginTop: '3px' } }, '"자동 0점" 사유는 항상 표시됩니다.')),
+      h('label', null, '학생 접속 주소'), h('div', null, h('input', { class: 'in mono', readonly: true, value: rUrl, style: { width: 'min(420px,100%)' }, onfocus: (e) => e.target.select() }), ' ',
+        h('button', { class: 'btn sm ghost', type: 'button', onclick: async () => { try { await navigator.clipboard.writeText(rUrl); toast('주소를 복사했습니다.'); } catch (e) { toast('복사하지 못했습니다. 주소를 직접 선택해 복사하세요.'); } } }, '복사'),
+        h('div', { style: { fontSize: '12px', color: 'var(--mute)', marginTop: '3px' } }, '첫 화면에서 [내 채점 결과 확인]을 눌러도 됩니다.'))),
+    h('div', { style: { margin: '10px 0 4px' } }, h('button', { class: 'btn', type: 'button', onclick: async () => { try { await saveRes(false); } catch (e) { errToast(e); } } }, '공개 설정 저장')),
+    rInfo));
+  pendInfo();
   box.append(h('div', { class: 'panel' }, h('h3', null, '시험 옵션'),
     h('div', { class: 'kv' },
       h('label', null, '제한 시간(분)'), fMin,
@@ -1975,7 +2182,56 @@ async function tabMonitor(box) {
 }
 
 /* ============ 시작 ============ */
+/* ============ 접속 진단 (#diag) — 서버·실행기 파일·파이썬 실행을 차례로 점검하고 결과를 복사할 수 있게 한다 ============ */
+function renderDiag() {
+  const out = h('pre', { style: { whiteSpace: 'pre-wrap', fontSize: '12.5px', background: '#f3f5fa', padding: '12px', borderRadius: '8px', minHeight: '120px', userSelect: 'text' } }, '[진단 시작]을 누르세요.');
+  const log = (t) => { out.textContent += (out.textContent.endsWith('\n') || !out.textContent ? '' : '\n') + t; };
+  const btn = h('button', { class: 'btn', type: 'button' }, '진단 시작');
+  const copy = h('button', { class: 'btn ghost', type: 'button', onclick: async () => { try { await navigator.clipboard.writeText(out.textContent); toast('복사했습니다.'); } catch (e) { toast('복사 실패: 글자를 직접 선택해 복사하세요.'); } } }, '결과 복사');
+  btn.addEventListener('click', async () => {
+    btn.disabled = true; out.textContent = '';
+    const T0 = Date.now(), ms = (t) => ((Date.now() - t) / 1000).toFixed(1) + '초';
+    log('시각: ' + new Date().toLocaleString('ko-KR'));
+    log('주소: ' + location.href.split('#')[0]);
+    log('브라우저: ' + navigator.userAgent);
+    log(`기기: 메모리 ${navigator.deviceMemory || '?'}GB · CPU ${navigator.hardwareConcurrency || '?'}코어 · 온라인 ${navigator.onLine}`);
+    log('');
+    log('① 서버(Supabase) 응답 속도');
+    try {
+      for (let i = 0; i < 4; i++) { const t = Date.now(); const c = await API.rpc('public_config', {}, { timeout: 10000 }); log(`   ${i + 1}회: ${Date.now() - t}ms · 응시 ${c && c.open ? '열림' : '닫힘'}`); }
+    } catch (e) { log('   ✖ 서버 연결 실패: ' + (e.cause && e.cause.message ? e.cause.message : e.message)); }
+    log('');
+    log('② 실행기 파일(주소별 HEAD 요청)');
+    for (const base of pyBases()) {
+      for (const f of ['pyodide.js', 'pyodide.asm.wasm', 'python_stdlib.zip']) {
+        const t = Date.now();
+        try { const r = await withTimeout(_fetch0(base + f, { method: 'HEAD', cache: 'no-store' }), 15000, '응답'); log(`   ${r.ok ? '✔' : '✖'} ${r.status} ${base.replace(/^https?:\/\//, '').slice(0, 60)}${f} (${Date.now() - t}ms${r.headers.get('content-length') ? ', ' + Math.round(r.headers.get('content-length') / 1e5) / 10 + 'MB' : ''})`); }
+        catch (e) { log(`   ✖ ${base.replace(/^https?:\/\//, '').slice(0, 60)}${f} → ${e.message}`); }
+      }
+    }
+    log('');
+    log('③ 파이썬 실행기 불러오기');
+    const t1 = Date.now();
+    try {
+      const fn = await ensurePy((m) => { /* 진행 문구 무시 */ });
+      log(`   ✔ 불러오기 성공 (${ms(t1)}) · 사용 주소: ${PY.last}`);
+      log('④ 파이썬 실행 시험');
+      const t2 = Date.now();
+      const r = JSON.parse(await fn("from microbit import *\nx = 0\nfor i in range(5):\n    x += i\nprint('합계', x)\ndisplay.show(Image.HEART)", JSON.stringify({ dry: true, limit: 50, speed: 1, offset: 0 })));
+      log(`   ${r.status === 'ok' || r.status === 'dry_ok' ? '✔' : '✖'} 결과: ${r.status}${r.message ? ' · ' + r.message : ''} (${Date.now() - t2}ms)`);
+    } catch (e) { log('   ✖ 실패: ' + (e && e.detail ? e.detail.split('\n').join('\n     ') : e && e.message ? e.message : e)); }
+    log('');
+    log(`총 소요 ${ms(T0)}. 이 결과를 선생님(또는 개발 담당)에게 그대로 전달하세요.`);
+    btn.disabled = false;
+  });
+  setScreen(h('div', { class: 'center' }, h('div', { class: 'login', style: { maxWidth: '760px', width: '100%' } },
+    h('h2', null, '접속 진단'),
+    h('p', { style: { color: 'var(--mute)' } }, '시뮬레이션이 안 돌아갈 때 이 화면에서 [진단 시작]을 누르고, 나온 결과를 복사해 선생님께 보내 주세요. 답안이나 개인정보는 전송되지 않습니다.'),
+    h('div', { class: 'ge-row' }, btn, copy), out)));
+}
 function route() {
+  if (location.hash === '#result') { if (live()) return; renderResultLogin(); return; }
+  if (location.hash === '#diag') { if (live()) return; renderDiag(); return; }
   if (location.hash === '#teacher') { if (live()) { toast('시험 중에는 교사 화면으로 이동할 수 없습니다.'); history.replaceState(null, '', location.pathname + location.search); return; } renderTeacher(); }
   else { if (live()) return; clearInterval(T.timer); if (/^#1$/.test(location.hash)) renderLogin(); else renderHome(); }
 }
