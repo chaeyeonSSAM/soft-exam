@@ -711,6 +711,7 @@ async function renderLogin(notice) {
   const showMsg = (t, cls = 'err') => msg.replaceChildren(t ? h('div', { class: 'msg ' + cls }, t) : '');
   if (notice) showMsg(notice, 'warn');
   const go = async () => {
+    if ((location.hash === '#retest') !== !!S.retest) { route(); return; }   // 주소와 시험 종류가 어긋나면 올바른 화면으로 다시 그림
     const no = fNo.value.trim(), name = fName.value.trim(), code = fCode.value.trim();
     if (!/^\d{5}$/.test(no)) return showMsg('학번은 숫자 5자리로 입력하세요. (예: 2학년 3반 1번 → 20301)');
     if (!name) return showMsg('이름을 입력하세요.');
@@ -719,7 +720,11 @@ async function renderLogin(notice) {
     btn.disabled = true; btn.textContent = '확인 중…'; showMsg('');
     try {
       let r = await API.rpc(sfn('start_exam'), { student_no: no, name, code }, { retries: 1 });
-      if (r.error) { showMsg(r.error); return; }
+      if (r.error) {
+        showMsg(r.error);
+        if (S.retest && /등록되어 있지 않/.test(r.error)) msg.append(h('div', { class: 'msg info', style: { marginTop: '8px' } }, '1차 수행평가를 아직 보지 않은 학생이라면 재시험이 아니라 1차 수행평가로 입장해야 합니다. ', h('a', { href: '#1', style: { fontWeight: 700 } }, '1차 수행평가로 입장')));
+        return;
+      }
       if (r.need_confirm) {   // 재시험을 처음 시작할 때: 되돌릴 수 없음을 확인
         const okc = await modal({ title: '재시험을 시작할까요?', body: h('div', null,
           h('p', null, `${r.name} 학생, 재시험은 시뮬레이터가 필요한 ${ITEMS.length}개 문항(${EXAM.meta.total}점)을 ${r.minutes}분 동안 다시 푸는 시험입니다.`),
@@ -739,7 +744,10 @@ async function renderLogin(notice) {
   btn.addEventListener('click', go);
   [fNo, fName, fCode].forEach((i) => i.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); }));
   const card = h('div', { class: 'login' },
-    h('div', { class: 'school' }, EXAM.meta.school + ' · ' + EXAM.meta.round + '차 수행평가'),
+    S.retest
+      ? h('div', { class: 'msg warn', style: { margin: '0 0 12px', textAlign: 'left', lineHeight: 1.6 } }, h('b', null, '【재시험 전용 화면】'), h('br'), '1차 수행평가를 이미 본 학생 중 선생님이 재시험 대상으로 등록한 학생만 들어올 수 있습니다.', h('br'), '1차 수행평가를 처음 보는 학생은 ', h('a', { href: '#1', style: { fontWeight: 700 } }, '여기를 눌러 1차 수행평가로 입장'), '하세요.')
+      : h('div', { class: 'msg ok', style: { margin: '0 0 12px', textAlign: 'left', lineHeight: 1.6 } }, h('b', null, '【1차 수행평가 본시험】'), ' 1차를 처음 보는 학생은 이 화면에서 입장합니다.'),
+    h('div', { class: 'school' }, EXAM.meta.school + ' · ' + EXAM.meta.round + '차 수행평가' + (S.retest ? ' 재시험' : '')),
     h('h1', null, EXAM.meta.title),
     h('div', { class: 'sub' }, EXAM.meta.sub + ' · ' + EXAM.meta.minutes + '분 · ' + EXAM.meta.total + '점'),
     stat,
@@ -2193,6 +2201,7 @@ async function tabRetest(box) {
       h('div', { style: { fontSize: '12.5px', color: 'var(--mute)', marginTop: '8px', lineHeight: 1.7 } },
         '학생 입장 주소: ', h('code', { class: 'mono' }, url), h('br'),
         '접속코드는 1차 시험 때 쓴 반별 접속코드를 그대로 사용합니다. 등록된 학생만 들어올 수 있고, 학생당 1번만 응시합니다.', h('br'),
+        h('b', null, '1차를 아직 한 번도 못 본 학생'), '은 재시험 대상이 아닙니다. 그 학생에게는 ', h('code', { class: 'mono' }, location.href.split('#')[0] + '#1'), ' 주소(또는 홈 화면의 1차 [입장하기])를 알려 주세요. 이때 화면 위쪽이 "응시 가능(열림)"이어야 합니다.', h('br'),
         `재시험 범위: 시뮬레이터가 필요한 ${itemIds.length}개 문항(${itemIds.join(', ')}) · ${maxPts}점. 이 문항들만 새 점수로 바뀌고 서술형·다른 문항 점수와 다른 학생 기록은 그대로입니다.`));
 
     /* 2) 대상 등록 */
