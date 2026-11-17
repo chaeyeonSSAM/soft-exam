@@ -1904,7 +1904,7 @@ async function renderTeacher(notice) {
     errToast(e); return;
   }
   const content = h('div');
-  const tabs = [['status', '응시 현황'], ['monitor', '실시간 감독'], ['review', '자동채점 검토'], ['grade', '서술형 채점'], ['retest', '재시험'], ['settings', '설정·접속코드'], ['export', '성적 내보내기']].filter(([k]) => !(T.round === 2 && k === 'retest'));
+  const tabs = [['status', '응시 현황'], ['monitor', '실시간 감독'], ['review', '자동채점 검토'], ['grade', '서술형 채점'], ['consist', '채점 일관성 검수'], ['retest', '재시험'], ['settings', '설정·접속코드'], ['export', '성적 내보내기']].filter(([k]) => !(T.round === 2 && k === 'retest'));
   const switchRound = (n) => { if (T.round === n) return; T.round = n; ssSet('mbexam_round', String(n)); T.tab = 'status'; T.ov = null; T.essayItem = null; T.classFilter = ''; T.gradeClass = ''; useExam(n === 2 ? EXAM_R2 : EXAM0); renderTeacher(); };
   const roundSw = h('span', { class: 'ge-row', style: { gap: '6px' } }, [[1, '1차 수행평가'], [2, '2차 수행평가']].map(([n, l]) => h('button', { class: 'btn sm' + (T.round === n ? '' : ' ghost'), type: 'button', onclick: () => switchRound(n) }, l)));
   const tabBar = h('div', { class: 'tabs' }, tabs.map(([k, l]) => h('button', { class: 'tab' + (T.tab === k ? ' on' : ''), type: 'button', onclick: () => { T.tab = k; renderTeacher(); } }, l)));
@@ -1918,6 +1918,7 @@ async function renderTeacher(notice) {
   else if (T.tab === 'monitor') tabMonitor(content);
   else if (T.tab === 'review') tabReview(content);
   else if (T.tab === 'grade') tabGrade(content);
+  else if (T.tab === 'consist') tabConsist(content);
   else if (T.tab === 'retest') tabRetest(content);
   else if (T.tab === 'settings') tabSettings(content);
   else tabExport(content);
@@ -2305,6 +2306,108 @@ async function tabGrade(box) {
       item.blocks.filter((b) => b.t === 'p' || b.t === 'essay').map((b) => b.t === 'p' ? h('p', { style: { margin: '4px 0' } }, b.text) : b.parts.map((p) => h('p', { style: { margin: '4px 0', fontWeight: 600 } }, p.label))),
       rubricBox(meta.rubric), hint,
       cards.length ? cards : h('div', { class: 'msg ok' }, T.onlyUngraded ? '미채점 답안이 없습니다.' : '제출된 답안이 아직 없습니다.')));
+  };
+  draw();
+}
+
+/* ---------- 2-2) 채점 일관성 검수: 비슷한 답안인데 점수가 다른 쌍 찾기 ---------- */
+function csNorm(s) { return String(s || '').toLowerCase().replace(/π|파이/g, 'pi').replace(/제곱/g, '**2').replace(/[\s.,;:!?'"`~()\[\]{}<>·…\-_]/g, ''); }
+function csGrams(t) { const s = new Set(); if (t.length < 2) { if (t) s.add(t); return s; } for (let i = 0; i < t.length - 1; i++) s.add(t.substr(i, 2)); return s; }
+function csDice(a, b) { if (!a.size || !b.size) return 0; let n = 0; const [s, l] = a.size < b.size ? [a, b] : [b, a]; for (const g of s) if (l.has(g)) n++; return 2 * n / (a.size + b.size); }
+/* 상대 답안에 없는 글자 조각(2글자 단위)을 노란색으로 표시 */
+function csHighlight(text, other) {
+  const strip = (s) => s.toLowerCase().replace(/[\s.,;:!?'"`~()\[\]{}<>·…\-_]/g, '');
+  const og = csGrams(strip(other)); const chars = Array.from(text); const keep = []; const low = [];
+  chars.forEach((c, i) => { const n = strip(c); if (n) { keep.push(i); low.push(n); } });
+  const mark = new Array(chars.length).fill(false);
+  for (let k = 0; k < keep.length - 1; k++) if (!og.has(low[k] + low[k + 1])) { mark[keep[k]] = true; mark[keep[k + 1]] = true; }
+  if (keep.length === 1 && !og.has(low[0])) mark[keep[0]] = true;
+  for (let i = 1; i < chars.length - 1; i++) if (!keep.includes(i)) mark[i] = mark[i - 1] && mark[i + 1];   // 공백·문장부호는 앞뒤가 모두 표시일 때만
+  const out = []; let i = 0;
+  while (i < chars.length) { let j = i; while (j < chars.length && mark[j] === mark[i]) j++; const seg = chars.slice(i, j).join(''); out.push(mark[i] ? h('mark', { style: { background: '#ffe58a', padding: '0 1px', borderRadius: '3px' } }, seg) : seg); i = j; }
+  return out;
+}
+async function tabConsist(box) {
+  const teacherItems = T.ov.items.filter((i) => i.mode === 'teacher');
+  const S = T.cs = T.cs || { th: 40, cross: false, item: '', off: {}, dedupe: true, limit: 30 };
+  box.append(h('div', { class: 'msg info' }, '불러오는 중…'));
+  let ex; try { ex = await tcall('t_export'); } catch (e) { box.replaceChildren(h('div', { class: 'msg err' }, e.message)); return; }
+  const clsOf = (r) => String(parseInt(String(r.student_no).slice(1, 3), 10));
+  const minc = T.ov.settings.essay_min_chars ?? 10;
+  const ansOf = (r, id) => { const it = ITEM_BY_ID[id]; const parts = []; for (const b of it.blocks) if (b.t === 'essay') for (const p of b.parts) parts.push(String((r.answers || {})[id + ':' + p.c] || '').trim()); return parts.join('\n'); };
+  const draw = () => {
+    const submitted = ex.rows.filter((r) => r.status === 'submitted');
+    const gradedCls = Array.from(new Set(submitted.filter((r) => teacherItems.some((i) => r.essay_scores[i.id] != null)).map(clsOf))).sort((a, b) => a - b);
+    const clsAll = Array.from(new Set(submitted.map(clsOf))).sort((a, b) => a - b);
+    /* 문항별 충돌 쌍 계산 */
+    const result = {};
+    for (const it of teacherItems) {
+      const id = it.id; const pool = [];
+      for (const r of submitted) {
+        if (S.off[clsOf(r)] || r.essay_scores[id] == null) continue;
+        if (/^자동 0점/.test(r.essay_notes[id] || '') && r.essay_scores[id] === 0) continue;
+        const text = ansOf(r, id); const n = csNorm(text); if (n.length <= minc) continue;
+        pool.push({ r, text, g: csGrams(n), pos: r.essay_scores[id] > 0 });
+      }
+      const pos = pool.filter((x) => x.pos), neg = pool.filter((x) => !x.pos); let pairs = [];
+      for (const a of neg) for (const b of pos) {
+        if (S.cross && clsOf(a.r) === clsOf(b.r)) continue;
+        const sim = csDice(a.g, b.g); if (sim >= S.th / 100) pairs.push({ a, b, sim });
+      }
+      pairs.sort((x, y) => y.sim - x.sim);
+      if (S.dedupe) { const used = new Set(); pairs = pairs.filter((p) => { if (used.has(p.a.r.id) || used.has(p.b.r.id)) return false; used.add(p.a.r.id); used.add(p.b.r.id); return true; }); }
+      result[id] = { pairs, n: pool.length };
+    }
+    const total = teacherItems.reduce((n, i) => n + result[i.id].pairs.length, 0);
+    /* 컨트롤 */
+    const itemSel = h('select', { class: 'in' }, [h('option', { value: '' }, `전체 문항 (${total}쌍)`), ...teacherItems.map((i) => h('option', { value: i.id }, `${i.id} (${result[i.id].pairs.length}쌍)`))]);
+    itemSel.value = S.item; itemSel.addEventListener('change', () => { S.item = itemSel.value; S.limit = 30; draw(); });
+    const th = h('input', { type: 'range', min: 30, max: 100, step: 5, value: S.th, style: { width: '160px' } });
+    const thLab = h('b', null, S.th + '%');
+    th.addEventListener('input', () => { thLab.textContent = th.value + '%'; });
+    th.addEventListener('change', () => { S.th = +th.value; S.limit = 30; draw(); });
+    const chkX = h('input', { type: 'checkbox', checked: S.cross }); chkX.addEventListener('change', () => { S.cross = chkX.checked; draw(); });
+    const chkD = h('input', { type: 'checkbox', checked: S.dedupe }); chkD.addEventListener('change', () => { S.dedupe = chkD.checked; draw(); });
+    const clsChk = clsAll.map((c) => { const k = h('input', { type: 'checkbox', checked: !S.off[c] }); k.addEventListener('change', () => { if (k.checked) delete S.off[c]; else S.off[c] = true; draw(); });
+      return h('label', { style: { fontSize: '13px', marginRight: '8px', whiteSpace: 'nowrap' } }, k, ' ' + c + '반' + (gradedCls.includes(c) ? '' : ' (채점 전)')); });
+    const ids = S.item ? [S.item] : teacherItems.map((i) => i.id);
+    const blocks = [];
+    for (const id of ids) {
+      const meta = ex.items.find((i) => i.id === id); const { pairs } = result[id];
+      if (!pairs.length) continue;
+      const shown = S.item ? pairs.slice(0, S.limit) : pairs.slice(0, 5);
+      const cards = shown.map((p) => {
+        const mk = (x, other) => {
+          const r = x.r; const st = { score: r.essay_scores[id], note: r.essay_notes[id] || '' };
+          return { r, st, el: h('div', { style: { flex: '1 1 340px', minWidth: '300px' } },
+            h('div', { class: 'ge-row' }, h('b', null, `${r.student_no} ${r.name}`), h('span', { class: 'chip ' + (x.pos ? 'g' : 'r') }, x.pos ? '정답 처리' : '오답 처리')),
+            h('div', { class: 'ans-box' }, csHighlight(x.text, other.text)),
+            gradeControls(r.id, meta, st, (sc) => { r.essay_scores = Object.assign({}, r.essay_scores); if (sc == null) delete r.essay_scores[id]; else r.essay_scores[id] = sc; r.essay_notes = Object.assign({}, r.essay_notes, { [id]: st.note }); refresh(); }, autoOf(meta, r.answers))) };
+        };
+        const A = mk(p.a, p.b), B = mk(p.b, p.a);
+        const stat = h('span', { class: 'chip r' }, '점수 다름');
+        const card = h('div', { style: { border: '1px solid var(--line)', borderRadius: '10px', padding: '8px 12px', margin: '10px 0' } },
+          h('div', { class: 'ge-row' }, h('span', { class: 'chip b' }, `${id} · 유사도 ${Math.round(p.sim * 100)}%`), p.sim >= 0.999 ? h('span', { class: 'chip r' }, '동일 답안') : null,
+            h('span', { style: { fontSize: '12px', color: 'var(--mute)' } }, clsOf(p.a.r) === clsOf(p.b.r) ? clsOf(p.a.r) + '반 안' : `${clsOf(p.a.r)}반 ↔ ${clsOf(p.b.r)}반`), stat,
+            h('span', { style: { fontSize: '12px', color: 'var(--mute)' } }, '노란 부분 = 상대 답안에 없는 표현')),
+          h('div', { class: 'ge-row', style: { alignItems: 'flex-start', gap: '14px' } }, A.el, B.el));
+        const refresh = () => { const same = (A.r.essay_scores[id] > 0) === (B.r.essay_scores[id] > 0) && A.r.essay_scores[id] != null && B.r.essay_scores[id] != null;
+          stat.className = 'chip ' + (same ? 'g' : 'r'); stat.textContent = same ? '✔ 같은 점수로 맞춤' : '점수 다름'; card.style.opacity = same ? '.6' : '1'; };
+        return card;
+      });
+      blocks.push(h('div', { style: { margin: '14px 0' } }, h('h3', { style: { margin: '6px 0' } }, `${id} — ${pairs.length}쌍`), S.item ? rubricBox(meta.rubric) : null, cards,
+        !S.item && pairs.length > shown.length ? h('button', { class: 'btn sm ghost', type: 'button', onclick: () => { S.item = id; S.limit = 30; draw(); } }, `이 문항 ${pairs.length}쌍 모두 보기`) : null,
+        S.item && pairs.length > shown.length ? h('button', { class: 'btn sm ghost', type: 'button', onclick: () => { S.limit += 30; draw(); } }, `더 보기 (${shown.length}/${pairs.length})`) : null));
+    }
+    const gradedCnt = submitted.reduce((n, r) => n + teacherItems.filter((i) => r.essay_scores[i.id] != null).length, 0);
+    box.replaceChildren(h('div', { class: 'panel' },
+      h('div', { class: 'ge-row' }, h('b', null, '문항'), itemSel, h('b', null, '유사도 기준'), th, thLab,
+        h('button', { class: 'btn sm ghost', type: 'button', onclick: () => { box.replaceChildren(); tabConsist(box); } }, '다시 불러오기')),
+      h('div', { class: 'ge-row' }, h('b', null, '비교할 반'), clsChk),
+      h('div', { class: 'ge-row' }, h('label', { style: { fontSize: '13px' } }, chkX, ' 서로 다른 반 답안끼리만 비교 (채점자가 다를 때)'), h('label', { style: { fontSize: '13px' } }, chkD, ' 한 답안당 1쌍만 보기 (겹치는 쌍 숨김)')),
+      h('div', { style: { fontSize: '12.5px', color: 'var(--mute)', lineHeight: 1.7, margin: '4px 0' } },
+        `채점이 끝난 ${gradedCnt}칸 중에서, 글이 비슷한데 한쪽은 정답·다른 쪽은 오답으로 채점된 쌍을 유사도 순으로 보여 줍니다. 아직 채점하지 않은 칸과 자동 0점 답안은 비교하지 않습니다. 쌍 안에서 바로 점수를 고치면 저장되며, 같은 점수가 되면 ✔로 바뀝니다. 유사도는 글자 조각(2글자) 겹침 기준이라, 표현은 달라도 뜻이 같은 답은 잡지 못할 수 있습니다. 다른 선생님이 나중에 채점하면 '다시 불러오기'로 새로 검수하세요.`)),
+      total ? h('div', { class: 'panel' }, blocks) : h('div', { class: 'panel' }, h('div', { class: 'msg ok' }, `기준 ${S.th}% 이상으로 비슷한데 점수가 다른 쌍이 없습니다. 기준을 낮춰 보세요.`)));
   };
   draw();
 }
